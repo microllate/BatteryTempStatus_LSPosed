@@ -14,6 +14,8 @@ allprojects {
         mavenCentral()
         // LSPosed / Xposed APIs (hosted via JitPack or MavenCentral mirrors)
         maven { url 'https://repo1.maven.org/maven2' }
+        maven { url "https://repo.xposed.info/" }
+        maven { url 'https://jitpack.io' }
     }
 }
 
