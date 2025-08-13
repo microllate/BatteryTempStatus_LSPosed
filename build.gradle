@@ -2,6 +2,7 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' }  // 添加 JitPack
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:7.4.2'
@@ -12,10 +13,7 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // LSPosed / Xposed APIs (hosted via JitPack or MavenCentral mirrors)
-        maven { url 'https://repo1.maven.org/maven2' }
-        maven { url "https://repo.xposed.info/" }
-        maven { url 'https://jitpack.io' }
+        maven { url 'https://jitpack.io' }  // 所有子项目都能访问 JitPack
     }
 }
 
