@@ -40,7 +40,7 @@ jobs:
 
       # 5. 上传 APK 作为 artifact
       - name: Upload APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: BatteryTempStatus_LSPosed-release
           path: app/build/outputs/apk/release/app-release.apk
