@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,10 +24,14 @@ jobs:
       - name: Install Gradle
         run: sudo apt-get update && sudo apt-get install -y gradle unzip
 
-      - name: Build APK
+      - name: Build APK with debug/test signing
         run: |
           cd $GITHUB_WORKSPACE
-          gradle assembleRelease --console=plain
+          # 使用 Gradle 的 debug 签名构建可直接安装 APK
+          gradle assembleRelease -Pandroid.injected.signing.store.file=app/debug.keystore \
+                                 -Pandroid.injected.signing.store.password=android \
+                                 -Pandroid.injected.signing.key.alias=androiddebugkey \
+                                 -Pandroid.injected.signing.key.password=android --console=plain
 
       - name: Upload APK
         uses: actions/upload-artifact@v3
