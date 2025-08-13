@@ -21,10 +21,11 @@ jobs:
         distribution: temurin
         java-version: 17
 
-    - name: Install Gradle
+    - name: Install Gradle 7.6
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gradle unzip
+        wget https://services.gradle.org/distributions/gradle-7.6-bin.zip
+        unzip gradle-7.6-bin.zip -d $HOME/gradle
+        echo "$HOME/gradle/gradle-7.6/bin" >> $GITHUB_PATH
 
     - name: Build APK
       run: |
@@ -36,3 +37,4 @@ jobs:
       with:
         name: BatteryTempStatus_LSPosed-release
         path: app/build/outputs/apk/release/app-release.apk
+
