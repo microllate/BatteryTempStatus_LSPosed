@@ -12,28 +12,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1️⃣ 检出代码
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    # 2️⃣ 设置 Java 17
-    - name: Set up Java 17
-      uses: actions/setup-java@v3
-      with:
-        distribution: temurin
-        java-version: 17
+      - name: Set up Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
 
-    # 3️⃣ 构建 APK，使用 Gradle Wrapper
-    - name: Build APK
-      run: |
-        chmod +x ./gradlew
-        ./gradlew assembleRelease --console=plain
+      - name: Build APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --console=plain
 
-    # 4️⃣ 上传 APK 到 Artifacts
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: BatteryTempStatus_LSPosed-release
-        path: app/build/outputs/apk/release/app-release.apk
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
           name: BatteryTempStatus_LSPosed-release
           path: app/build/outputs/apk/release/app-release.apk
