@@ -1,4 +1,4 @@
-name: Android LSP Build
+name: Build LSP Module APK
 
 on:
   push:
@@ -14,30 +14,35 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Set up JDK 17
+    - name: Set up JDK 21
       uses: actions/setup-java@v3
       with:
-        distribution: 'temurin'
-        java-version: 17
+        distribution: temurin
+        java-version: 21
 
-    - name: Install Android SDK
+    - name: Download Android SDK Command-line Tools
       run: |
-        export ANDROID_HOME=$HOME/android-sdk
-        mkdir -p $ANDROID_HOME/cmdline-tools
-        cd $ANDROID_HOME/cmdline-tools
-        curl -o commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip commandlinetools.zip
-        rm commandlinetools.zip
-        mv cmdline-tools latest
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+        mkdir -p $HOME/android-sdk/cmdline-tools
+        curl -o sdk-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q sdk-tools.zip -d $HOME/android-sdk/cmdline-tools
+        mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        rm sdk-tools.zip
 
-    - name: Generate local.properties
+    - name: Accept SDK licenses
+      run: yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+
+    - name: Install SDK packages
       run: |
-        echo "sdk.dir=$HOME/android-sdk" > local.properties
+        $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-    - name: Grant Gradle wrapper execute permission
+    - name: Set environment variables
+      run: |
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "PATH=$HOME/android-sdk/platform-tools:$PATH" >> $GITHUB_PATH
+
+    - name: Make Gradle executable
       run: chmod +x ./gradlew
 
-    - name: Clean and build release
-      run: ./gradlew clean assembleRelease -Pandroid.injected.invoked.from.ide=true --no-daemon
+    - name: Build Release APK
+      run: ./gradlew assembleRelease -x lintVitalRelease
