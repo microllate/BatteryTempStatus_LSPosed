@@ -10,16 +10,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      ANDROID_HOME: ${{ runner.tool_cache }}/android-sdk
-      PATH: ${{ runner.tool_cache }}/android-sdk/cmdline-tools/latest/bin:${{ runner.tool_cache }}/android-sdk/platform-tools:${PATH}
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
-      with:
-        submodules: false
 
     - name: Set up JDK 17
       uses: actions/setup-java@v3
@@ -29,18 +22,19 @@ jobs:
 
     - name: Install Android SDK
       run: |
+        export ANDROID_HOME=$HOME/android-sdk
         mkdir -p $ANDROID_HOME/cmdline-tools
         cd $ANDROID_HOME/cmdline-tools
         curl -o commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip commandlinetools.zip
         rm commandlinetools.zip
         mv cmdline-tools latest
-        yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
-        sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
     - name: Generate local.properties
       run: |
-        echo "sdk.dir=$ANDROID_HOME" > local.properties
+        echo "sdk.dir=$HOME/android-sdk" > local.properties
 
     - name: Grant Gradle wrapper execute permission
       run: chmod +x ./gradlew
