@@ -1,4 +1,4 @@
-name: Build LSP APK
+name: Build APK
 
 on:
   push:
@@ -8,53 +8,48 @@ on:
 
 jobs:
   build:
-    name: Build APK
     runs-on: ubuntu-latest
 
-    env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-
     steps:
-    # 1. 检出代码
+    # Step 1: Checkout repository
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        submodules: false
 
-    # 2. 设置 Java
-    - name: Setup Java
+    # Step 2: Set up JDK
+    - name: Set up JDK
       uses: actions/setup-java@v3
       with:
         distribution: 'temurin'
         java-version: 21
 
-    # 3. 安装 Android SDK
-    - name: Install Android SDK
-      run: |
-        mkdir -p $ANDROID_SDK_ROOT
-        sudo apt-get update
-        sudo apt-get install -y unzip wget lib32z1 lib32stdc++6
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-        unzip cmdline-tools.zip -d $ANDROID_SDK_ROOT
-        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
-        mv $ANDROID_SDK_ROOT/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/
-        yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    # Step 3: Set up Android SDK
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        sdk-version: '34'
 
-    # 4. 配置 local.properties
-    - name: Configure local.properties
-      run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+    # Step 4: Cache Gradle
+    - name: Cache Gradle
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties') }}
+        restore-keys: |
+          gradle-${{ runner.os }}-
 
-    # 5. Grant executable for Gradle wrapper
-    - name: Make gradlew executable
+    # Step 5: Grant executable permission to Gradle wrapper
+    - name: Make Gradle wrapper executable
       run: chmod +x ./gradlew
 
-    # 6. Build APK
-    - name: Build Release APK
-      run: ./gradlew clean assembleRelease --no-daemon --warning-mode all
+    # Step 6: Build APK
+    - name: Build APK
+      run: ./gradlew clean assembleRelease
 
-    # 7. Upload APK artifact
+    # Step 7: Upload APK artifact
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: LSP-Release-APK
-        path: app/build/outputs/apk/release/*.apk
+        name: app-release.apk
+        path: app/build/outputs/apk/release/app-release.apk
