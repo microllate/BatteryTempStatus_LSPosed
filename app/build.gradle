@@ -1,4 +1,4 @@
-plugins {
+额plugins {
     id 'com.android.application'
     id 'kotlin-android'
 }
@@ -28,7 +28,7 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "21"
     }
 }
 
