@@ -22,67 +22,67 @@ public class Entry implements IXposedHookLoadPackage {
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!PKG_SYSTEMUI.equals(lpparam.packageName)) return;
 
-        hookBatteryViews(lpparam);
-    }
-
-    private void hookBatteryViews(final XC_LoadPackage.LoadPackageParam lpparam) {
-        // 只针对你的系统存在的类
-        String[] targetClasses = new String[]{
-                "com.android.systemui.battery.BatteryMeterView",
-                "com.android.systemui.statusbar.views.MiuiBatteryMeterView"
-        };
-
-        for (String cls : targetClasses) {
-            try {
-                final Class<?> target = XposedHelpers.findClass(cls, lpparam.classLoader);
-
-                // 只 hook updateShowPercent() 方法
-                XposedBridge.hookAllMethods(target, "updateShowPercent", new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        appendBatteryTemp(param.thisObject);
-                    }
-                });
-
-                XposedBridge.log("BatteryTempStatus: hooked " + cls + "#updateShowPercent");
-
-            } catch (Throwable t) {
-                XposedBridge.log("BatteryTempStatus: class not found " + cls + " - " + t);
-            }
-        }
-    }
-
-    private void appendBatteryTemp(Object batteryViewObj) {
         try {
-            Context context = (Context) XposedHelpers.getObjectField(batteryViewObj, "mContext");
-            if (context == null) return;
+            final Class<?> clazz = XposedHelpers.findClass(
+                    "com.android.systemui.battery.BatteryMeterView",
+                    lpparam.classLoader
+            );
 
-            // 获取电池温度（0.1°C单位）
-            Intent intent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            if (intent == null) return;
-            int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
-            int celsius = Math.round(tempTenth / 10.0f);
+            XposedBridge.hookAllMethods(clazz, "updateShowPercent", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Object batteryMeterView = param.thisObject;
+                    TextView percentView = findPercentTextView(batteryMeterView);
 
-            // 获取 mBatteryPercentView 字段（TextView）
-            Field field = batteryViewObj.getClass().getDeclaredField("mBatteryPercentView");
-            field.setAccessible(true);
-            Object view = field.get(batteryViewObj);
-            if (view instanceof TextView) {
-                TextView tv = (TextView) view;
-                CharSequence text = tv.getText();
-                String newText = appendTemp(text == null ? "" : text.toString(), celsius);
-                if (!newText.contentEquals(text)) {
-                    tv.setText(newText);
+                    if (percentView != null) {
+                        Context context = (Context) XposedHelpers.getObjectField(batteryMeterView, "mContext");
+                        if (context == null) return;
+
+                        Intent intent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                        if (intent == null) return;
+
+                        int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
+                        int celsius = Math.round(tempTenth / 10.0f);
+
+                        CharSequence current = percentView.getText();
+                        String updated = appendTemp(current == null ? "" : current.toString(), celsius);
+
+                        if (!updated.contentEquals(current)) {
+                            percentView.setText(updated);
+                        }
+
+                        // DEBUG日志
+                        XposedBridge.log("BatteryTemp DEBUG: " + updated +
+                                ", visibility=" + percentView.getVisibility() +
+                                ", width=" + percentView.getWidth() +
+                                ", height=" + percentView.getHeight());
+                    } else {
+                        XposedBridge.log("BatteryTemp DEBUG: TextView not found!");
+                    }
                 }
-            }
-
+            });
         } catch (Throwable t) {
-            XposedBridge.log("BatteryTempStatus append failed: " + t);
+            XposedBridge.log("BatteryTemp DEBUG: hook failed: " + t);
         }
+    }
+
+    private TextView findPercentTextView(Object obj) {
+        Field[] fields = obj.getClass().getDeclaredFields();
+        for (Field f : fields) {
+            if (TextView.class.isAssignableFrom(f.getType())) {
+                try {
+                    f.setAccessible(true);
+                    Object val = f.get(obj);
+                    if (val instanceof TextView) return (TextView) val;
+                } catch (Throwable ignored) {}
+            }
+        }
+        return null;
     }
 
     private String appendTemp(String text, int celsius) {
-        if (text.contains("℃")) return text; // 已有温度
+        if (text == null) text = "";
+        if (text.contains("℃")) return text; // 已经有温度
         return text.trim() + " " + celsius + "℃";
     }
 }
