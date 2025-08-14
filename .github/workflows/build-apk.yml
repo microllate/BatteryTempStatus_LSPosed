@@ -4,49 +4,43 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      GRADLE_USER_HOME: ${{ github.workspace }}/.gradle
-
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ env.PATH }}
+      
     steps:
-      # Checkout code
+      # 拉取仓库
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      # Install essential tools
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tar unzip openjdk-21-jdk git
+      # 安装 Java（与 Kotlin JVM target 一致）
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
 
-      # Set up Android SDK
-      - name: Setup Android SDK
+      # 下载并解压 Android SDK cmdline-tools
+      - name: Download Android SDK
         run: |
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          cd $ANDROID_SDK_ROOT/cmdline-tools
-          # 下载最新 cmdline-tools zip 或使用你自己存放的 URL
-          curl -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip -o cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          mkdir -p $ANDROID_HOME
+          cd $ANDROID_HOME
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
           rm cmdline-tools.zip
-        shell: bash
+          mv cmdline-tools latest
 
-      # Add Android SDK tools to PATH
-      - name: Add SDK tools to PATH
+      # 安装 SDK 平台和 Build Tools
+      - name: Install SDK packages
         run: |
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      # Accept licenses
-      - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses
-
-      # Build with Gradle wrapper
+      # 构建 release APK
       - name: Build APK
-        run: ./gradlew clean assembleRelease
+        run: ./gradlew clean assembleRelease --warning-mode all
