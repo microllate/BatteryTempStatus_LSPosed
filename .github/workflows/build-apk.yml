@@ -2,49 +2,57 @@ name: Build LSP APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        shell: bash
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
 
     steps:
-    # 拉取仓库并初始化子模块
+    # 1. 检出代码
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
-        submodules: recursive
+        submodules: false
 
-    # 安装 JDK 21
-    - name: Set up JDK 21
+    # 2. 设置 Java
+    - name: Setup Java
       uses: actions/setup-java@v3
       with:
-        distribution: temurin
+        distribution: 'temurin'
         java-version: 21
 
-    # 安装 Android SDK
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v2
-      with:
-        api-level: 33
-        build-tools: 33.0.2
-
-    # 确认 gradle wrapper 使用官方 URL
-    - name: Ensure Gradle Wrapper
+    # 3. 安装 Android SDK
+    - name: Install Android SDK
       run: |
-        ./gradlew --version
+        mkdir -p $ANDROID_SDK_ROOT
+        sudo apt-get update
+        sudo apt-get install -y unzip wget lib32z1 lib32stdc++6
+        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+        unzip cmdline-tools.zip -d $ANDROID_SDK_ROOT
+        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
+        mv $ANDROID_SDK_ROOT/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/
+        yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-    # 构建 Release APK
+    # 4. 配置 local.properties
+    - name: Configure local.properties
+      run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+    # 5. Grant executable for Gradle wrapper
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+
+    # 6. Build APK
     - name: Build Release APK
-      run: |
-        ./gradlew clean assembleRelease --no-daemon --warning-mode all
+      run: ./gradlew clean assembleRelease --no-daemon --warning-mode all
 
-    # 上传 APK 产物
+    # 7. Upload APK artifact
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
