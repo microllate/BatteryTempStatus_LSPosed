@@ -1,17 +1,17 @@
-name: Android Build
+name: Build LSP APK
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
+    - name: Checkout repository
       uses: actions/checkout@v3
 
     - name: Set up JDK 17
@@ -20,5 +20,10 @@ jobs:
         java-version: 17
         distribution: temurin
 
+    - name: Grant execute permission for gradlew
+      run: chmod +x ./gradlew
+      working-directory: ./
+
     - name: Build APK
-      run: ./gradlew clean assembleRelease
+      run: ./gradlew clean assembleRelease --stacktrace --info --warning-mode all --no-daemon
+      working-directory: ./  # 确保在项目根目录
