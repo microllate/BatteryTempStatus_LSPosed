@@ -7,10 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  setup:
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      sdk-path: ${{ steps.sdk-path.outputs.android_home }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,26 +18,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: 21
+          cache: 'gradle' # 加上这一行，可以提高 Gradle 依赖下载速度
 
-      - name: Cache Gradle
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: gradle-
-
-      - name: Cache Android SDK
-        uses: actions/cache@v3
-        id: sdk-cache
-        with:
-          path: android-sdk
-          key: android-sdk-${{ hashFiles('**/build.gradle') }}
-          restore-keys: android-sdk-
-
+      # 使用 android-actions/setup-android@v2 替代了手动配置
+      # 它会处理 SDK 的下载、缓存、许可协议接受以及环境变量设置
       - name: Setup Android SDK
-        id: sdk-path
         uses: android-actions/setup-android@v2
         with:
           api-level: 34
@@ -47,43 +30,17 @@ jobs:
           cmdline-tools-version: '9123335'
           cache: true
 
-      - name: Accept Android SDK licenses
-        run: yes | ${{ steps.sdk-path.outputs.android_home }}/cmdline-tools/latest/bin/sdkmanager --licenses
-
-  build:
-    needs: setup
-    runs-on: ubuntu-latest
-    env:
-      JAVA_HOME: /usr/lib/jvm/java-21-openjdk
-      ANDROID_HOME: ${{ needs.setup.outputs.sdk-path }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Restore Gradle cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
-
-      - name: Restore Android SDK cache
-        uses: actions/cache@v3
-        with:
-          path: android-sdk
-          key: android-sdk-${{ hashFiles('**/build.gradle') }}
-
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
 
+      # 这一步通常不推荐，因为它会覆盖你的项目配置。
+      # 除非你确定需要强制使用某个版本的 Gradle，否则可以移除。
       - name: Use Gradle Wrapper with official URL
         run: |
           sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip|' gradle/wrapper/gradle-wrapper.properties
-
+      
       - name: Parallel Gradle build
-        run: |
-          ./gradlew clean lintVitalRelease assembleRelease --parallel --max-workers=4 --stacktrace
+        run: ./gradlew clean lintVitalRelease assembleRelease --parallel --max-workers=4 --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
