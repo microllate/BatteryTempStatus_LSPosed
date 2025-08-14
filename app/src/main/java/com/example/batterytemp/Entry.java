@@ -1,12 +1,15 @@
 package com.example.batterytemp;
 
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
-
-import java.io.File;
+import android.os.BatteryManager;
+import android.os.Build;
+import android.util.Log;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -14,67 +17,74 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
+/**
+ * LSPosed/Xposed entry. 在电池图标左侧显示温度。
+ */
 public class Entry implements IXposedHookLoadPackage {
+
+    private static final String PKG_SYSTEMUI = "com.android.systemui";
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 只 hook SystemUI
-        if (!"com.android.systemui".equals(lpparam.packageName)) {
-            return;
-        }
+        if (!PKG_SYSTEMUI.equals(lpparam.packageName)) return;
 
-        XposedBridge.log("BatteryTempOverlay: Loading in SystemUI");
+        hookBatteryDrawable(lpparam);
+    }
 
+    private void hookBatteryDrawable(final XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            XposedHelpers.findAndHookMethod(
+            final Class<?> drawableClass = XposedHelpers.findClass(
                     "com.android.settingslib.graph.BatteryMeterDrawableBase",
-                    lpparam.classLoader,
-                    "draw",
-                    Canvas.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            Canvas canvas = (Canvas) param.args[0];
-                            if (canvas == null) return;
-
-                            Drawable drawable = (Drawable) param.thisObject;
-                            Rect bounds = drawable.getBounds();
-
-                            // 获取温度（这里用 sys/class/power_supply）
-                            String tempText = getBatteryTemp() + "°C";
-
-                            Paint paint = new Paint();
-                            paint.setColor(Color.RED);
-                            paint.setTextSize(bounds.height() * 0.6f); // 跟电池高度适配
-                            paint.setAntiAlias(true);
-                            paint.setFakeBoldText(true);
-
-                            // 在电池右边画温度
-                            float x = bounds.right + 4; // 右移一点
-                            float y = bounds.bottom - (bounds.height() * 0.2f); // 底部上移一点
-                            canvas.drawText(tempText, x, y, paint);
-
-                            XposedBridge.log("BatteryTempOverlay: drew temp '" + tempText + "' at " + x + "," + y);
-                        }
-                    }
+                    lpparam.classLoader
             );
+
+            XposedBridge.hookAllMethods(drawableClass, "draw", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Object drawableObj = param.thisObject;
+                    Canvas canvas = (Canvas) param.args[0];
+
+                    // 获取电池位置
+                    Rect bounds = (Rect) XposedHelpers.callMethod(drawableObj, "getBounds");
+                    if (bounds == null) return;
+
+                    // 获取温度
+                    int tempC = getBatteryTemp((Context) XposedHelpers.getObjectField(drawableObj, "mContext"));
+
+                    // 绘制温度
+                    Paint paint = new Paint();
+                    paint.setColor(Color.WHITE);
+                    paint.setTextSize(bounds.height() * 0.6f);
+                    paint.setAntiAlias(true);
+
+                    String tempText = tempC + "℃";
+                    float textWidth = paint.measureText(tempText);
+
+                    // 电池左边 8px 处绘制温度
+                    float x = bounds.left - textWidth - 8;
+                    float y = bounds.centerY() - ((paint.descent() + paint.ascent()) / 2);
+
+                    canvas.drawText(tempText, x, y, paint);
+
+                    XposedBridge.log("BatteryTempOverlay: drew temperature " + tempText);
+                }
+            });
+
+            XposedBridge.log("BatteryTempOverlay: hooked draw() on BatteryMeterDrawableBase");
         } catch (Throwable t) {
-            XposedBridge.log("BatteryTempOverlay ERROR: " + t);
+            XposedBridge.log("BatteryTempOverlay: hook failed: " + t);
         }
     }
 
-    // 从系统文件读取温度
-    private String getBatteryTemp() {
+    private int getBatteryTemp(Context context) {
         try {
-            File f = new File("/sys/class/power_supply/battery/temp");
-            if (f.exists()) {
-                String content = new java.util.Scanner(f).useDelimiter("\\A").next().trim();
-                int temp = Integer.parseInt(content);
-                return String.valueOf(temp / 10.0); // 部分设备温度是以 0.1°C 为单位
-            }
-        } catch (Throwable e) {
-            XposedBridge.log("BatteryTempOverlay: read temp failed " + e);
+            Intent intent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (intent == null) return 0;
+            int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
+            return Math.round(tempTenth / 10.0f);
+        } catch (Throwable t) {
+            Log.e("BatteryTempOverlay", "getBatteryTemp failed: " + t);
+            return 0;
         }
-        return "--";
     }
 }
