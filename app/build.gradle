@@ -21,10 +21,12 @@ android {
     }
 }
 
-
 dependencies {
-    // Xposed API for compileOnly (provided at runtime by LSPosed)
-    implementation 'com.github.LSPosed:XposedAPI:82'
+    // ✅ 官方 Xposed API，运行时由 LSPosed 框架提供
     compileOnly 'de.robv.android.xposed:api:82'
     compileOnly 'de.robv.android.xposed:api:82:sources'
+
+    // 其他依赖
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core-ktx:1.12.0'
 }
