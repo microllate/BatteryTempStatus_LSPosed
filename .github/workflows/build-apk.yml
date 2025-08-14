@@ -20,10 +20,15 @@ jobs:
         java-version: 17
         distribution: temurin
 
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v2
+      with:
+        api-level: 34
+        build-tools: 34.0.0
+        ndk: false
+
     - name: Grant execute permission for gradlew
       run: chmod +x ./gradlew
-      working-directory: ./
 
     - name: Build APK
       run: ./gradlew clean assembleRelease --stacktrace --info --warning-mode all --no-daemon
-      working-directory: ./  # 确保在项目根目录
