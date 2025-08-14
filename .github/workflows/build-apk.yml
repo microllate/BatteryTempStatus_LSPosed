@@ -14,18 +14,15 @@ jobs:
       PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:${{ env.PATH }}
       
     steps:
-      # 拉取仓库
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 安装 Java（与 Kotlin JVM target 一致）
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 17
 
-      # 下载并解压 Android SDK cmdline-tools
       - name: Download Android SDK
         run: |
           mkdir -p $ANDROID_HOME
@@ -35,12 +32,10 @@ jobs:
           rm cmdline-tools.zip
           mv cmdline-tools latest
 
-      # 安装 SDK 平台和 Build Tools
-      - name: Install SDK packages
+      - name: Accept SDK licenses and install packages
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      # 构建 release APK
       - name: Build APK
         run: ./gradlew clean assembleRelease --warning-mode all
