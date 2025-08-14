@@ -10,46 +10,58 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      PATH: ${{ github.workspace }}/android-sdk/cmdline-tools/latest/bin:${{ github.workspace }}/android-sdk/platform-tools:$PATH
+
     steps:
-    # Step 1: Checkout repository
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # Step 2: Set up JDK
-    - name: Set up JDK
-      uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: 21
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 21
 
-    # Step 3: Set up Android SDK
-    - name: Set up Android SDK
-      uses: android-actions/setup-android@v3
-      with:
-        sdk-version: '34'
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
 
-    # Step 4: Cache Gradle
-    - name: Cache Gradle
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: gradle-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties') }}
-        restore-keys: |
-          gradle-${{ runner.os }}-
+      - name: Cache Android SDK
+        uses: actions/cache@v3
+        with:
+          path: android-sdk
+          key: android-sdk-${{ hashFiles('**/build.gradle') }}
 
-    # Step 5: Grant executable permission to Gradle wrapper
-    - name: Make Gradle wrapper executable
-      run: chmod +x ./gradlew
+      - name: Install Android SDK Command-line Tools
+        run: |
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          curl -o sdk-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q sdk-tools.zip -d $ANDROID_HOME/cmdline-tools
+          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          yes | sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-    # Step 6: Build APK
-    - name: Build APK
-      run: ./gradlew clean assembleRelease
+      - name: Grant execute permission to Gradle wrapper
+        run: chmod +x ./gradlew
 
-    # Step 7: Upload APK artifact
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-release.apk
-        path: app/build/outputs/apk/release/app-release.apk
+      - name: Build APK
+        run: |
+          ./gradlew clean assembleRelease \
+            --stacktrace \
+            --continue \
+            --parallel \
+            -Dorg.gradle.parallel=true \
+            -Dorg.gradle.workers.max=4 \
+            -Dorg.gradle.configureondemand=true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: app/build/outputs/apk/release/*.apk
