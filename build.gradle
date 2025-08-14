@@ -1,8 +1,7 @@
 buildscript {
     repositories {
         google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' }  // 添加 JitPack
+        mavenCentral()  // 官方库
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:7.4.2'
@@ -13,7 +12,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }  // 所有子项目都能访问 JitPack
     }
 }
 
