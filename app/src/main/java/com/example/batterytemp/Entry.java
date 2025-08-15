@@ -4,10 +4,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.BatteryManager;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.TypedValue;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
 import android.widget.TextView;
-
-import java.lang.reflect.Field;
-
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -17,6 +19,9 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class Entry implements IXposedHookLoadPackage {
 
     private static final String PKG_SYSTEMUI = "com.android.systemui";
+    private TextView tempTextView = null;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Context systemUiContext;
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -24,40 +29,31 @@ public class Entry implements IXposedHookLoadPackage {
 
         try {
             final Class<?> clazz = XposedHelpers.findClass(
-                    "com.android.systemui.battery.BatteryMeterView",
+                    "com.android.systemui.statusbar.phone.MiuiPhoneStatusBarView",
                     lpparam.classLoader
             );
 
-            XposedBridge.hookAllMethods(clazz, "updateShowPercent", new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(clazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Object batteryMeterView = param.thisObject;
-                    TextView percentView = findPercentTextView(batteryMeterView);
+                    ViewGroup statusBarView = (ViewGroup) param.thisObject;
+                    systemUiContext = statusBarView.getContext();
 
-                    if (percentView != null) {
-                        Context context = (Context) XposedHelpers.getObjectField(batteryMeterView, "mContext");
-                        if (context == null) return;
+                    // 使用你提供的 ID 0x7f0a082f 直接定位左侧容器
+                    ViewGroup leftSideGroup = (ViewGroup) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a082f);
 
-                        Intent intent = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-                        if (intent == null) return;
+                    if (leftSideGroup != null) {
+                        tempTextView = new TextView(systemUiContext);
+                        tempTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                        tempTextView.setPadding(0, 0, 10, 0);
 
-                        int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
-                        int celsius = Math.round(tempTenth / 10.0f);
-
-                        CharSequence current = percentView.getText();
-                        String updated = appendTemp(current == null ? "" : current.toString(), celsius);
-
-                        if (!updated.contentEquals(current)) {
-                            percentView.setText(updated);
-                        }
-
-                        // DEBUG日志
-                        XposedBridge.log("BatteryTemp DEBUG: " + updated +
-                                ", visibility=" + percentView.getVisibility() +
-                                ", width=" + percentView.getWidth() +
-                                ", height=" + percentView.getHeight());
+                        // 将 TextView 添加到左侧容器中
+                        leftSideGroup.addView(tempTextView, 3);
+                        XposedBridge.log("BatteryTemp DEBUG: TextView added to left side of status bar.");
+                        
+                        startTempUpdate();
                     } else {
-                        XposedBridge.log("BatteryTemp DEBUG: TextView not found!");
+                        XposedBridge.log("BatteryTemp DEBUG: Left side container with ID 0x7f0a082f not found.");
                     }
                 }
             });
@@ -66,23 +62,21 @@ public class Entry implements IXposedHookLoadPackage {
         }
     }
 
-    private TextView findPercentTextView(Object obj) {
-        Field[] fields = obj.getClass().getDeclaredFields();
-        for (Field f : fields) {
-            if (TextView.class.isAssignableFrom(f.getType())) {
-                try {
-                    f.setAccessible(true);
-                    Object val = f.get(obj);
-                    if (val instanceof TextView) return (TextView) val;
-                } catch (Throwable ignored) {}
+    private void startTempUpdate() {
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (tempTextView != null && systemUiContext != null) {
+                    Intent intent = systemUiContext.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                    if (intent != null) {
+                        int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
+                        int celsius = Math.round(tempTenth / 10.0f);
+                        String tempString = " " + celsius + "℃";
+                        tempTextView.setText(tempString);
+                    }
+                }
+                handler.postDelayed(this, 5000);
             }
-        }
-        return null;
-    }
-
-    private String appendTemp(String text, int celsius) {
-        if (text == null) text = "";
-        if (text.contains("℃")) return text; // 已经有温度
-        return text.trim() + " " + celsius + "℃";
+        });
     }
 }
