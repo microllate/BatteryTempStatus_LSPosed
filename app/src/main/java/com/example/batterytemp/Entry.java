@@ -4,13 +4,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.ColorStateList;
-import android.content.res.Configuration;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -36,7 +34,7 @@ public class Entry implements IXposedHookLoadPackage {
                     lpparam.classLoader
             );
             
-            // Hook onFinishInflate 方法，用于初始化和添加 TextView
+            // Hook onFinishInflate 方法，用于添加 TextView
             XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -61,15 +59,21 @@ public class Entry implements IXposedHookLoadPackage {
                     }
                 }
             });
+
+            // Hook NetworkSpeedView 的方法来同步颜色变化
+            final Class<?> networkSpeedViewClazz = XposedHelpers.findClass(
+                    "com.android.systemui.statusbar.views.NetworkSpeedView",
+                    lpparam.classLoader
+            );
             
-            // Hook onConfigurationChanged 方法来同步颜色
-            XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onConfigurationChanged",
-                Configuration.class, new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "setTextColor",
+                ColorStateList.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (tempTextView != null && statusBarView != null) {
-                            updateTextColorAndSize(statusBarView, tempTextView);
-                            XposedBridge.log("BatteryTemp DEBUG: Text color updated due to onConfigurationChanged.");
+                        if (tempTextView != null) {
+                            TextView networkSpeedView = (TextView) param.thisObject;
+                            updateTextColor(networkSpeedView, tempTextView);
+                            XposedBridge.log("BatteryTemp DEBUG: Text color updated via NetworkSpeedView hook.");
                         }
                     }
                 }
@@ -93,7 +97,7 @@ public class Entry implements IXposedHookLoadPackage {
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 1000); // 更改为1秒更新一次
+                handler.postDelayed(this, 1000);
             }
         });
     }
@@ -110,6 +114,13 @@ public class Entry implements IXposedHookLoadPackage {
         } else {
             targetTextView.setTextColor(0xFFFFFFFF);
             targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        }
+    }
+
+    private void updateTextColor(TextView sourceView, TextView targetTextView) {
+        ColorStateList textColor = sourceView.getTextColors();
+        if (textColor != null) {
+            targetTextView.setTextColor(textColor);
         }
     }
 }
