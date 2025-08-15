@@ -108,9 +108,9 @@ public class Entry implements IXposedHookLoadPackage {
                         
                         String powerString;
                         if (power < 0) {
-                            powerString = String.format("充电 %smW", Math.round(power));
+                            powerString = String.format("充电 %sW", Math.round(power));
                         } else {
-                            powerString = String.format("耗电 %smW", Math.round(-power));
+                            powerString = String.format("耗电 %sW", Math.round(-power));
                         }
                         
                         // 组合文本并更新UI
