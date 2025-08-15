@@ -108,9 +108,9 @@ public class Entry implements IXposedHookLoadPackage {
                         
                         String powerString;
                         if (power < 0) {
-                            powerString = String.format("充电 %sW", power);
+                            powerString = String.format("充电 %.2fW", power);
                         } else {
-                            powerString = String.format("耗电 %sW", power);
+                            powerString = String.format("耗电 %.2fW", power);
                         }
                         
                         // 组合文本并更新UI
@@ -118,7 +118,7 @@ public class Entry implements IXposedHookLoadPackage {
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 5000); // 1秒更新一次
+                handler.postDelayed(this, 2000); // 1秒更新一次
             }
         });
     }
