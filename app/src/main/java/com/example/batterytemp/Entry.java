@@ -74,7 +74,6 @@ public class Entry implements IXposedHookLoadPackage {
                             TextView currentTextView = (TextView) param.thisObject;
                             if (currentTextView.getParent() != null && 
                                 currentTextView.getParent().getClass() == networkSpeedViewClazz) {
-                                // 确认是网速视图的子TextView后，更新我们的TextView
                                 int color = (int) param.args[0];
                                 tempTextView.setTextColor(color);
                             }
@@ -99,16 +98,23 @@ public class Entry implements IXposedHookLoadPackage {
                         int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
                         int celsius = Math.round(tempTenth / 10.0f);
                         
-                        // 获取并计算功率
+                        // 获取电压和电流
                         BatteryManager batteryManager = (BatteryManager) systemUiContext.getSystemService(Context.BATTERY_SERVICE);
                         int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
                         
-                        // 计算功率，单位 mW
-                        float power = (float)voltage * (float)current / 1000000.0f;
+                        // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
+                        float power = (float)voltage * (float)current / 1000.0f;
+                        
+                        String powerString;
+                        if (power > 0) {
+                            powerString = String.format("充电 %smW", Math.round(power));
+                        } else {
+                            powerString = String.format("耗电 %smW", Math.round(-power));
+                        }
                         
                         // 组合文本并更新UI
-                        String tempString = String.format(" %s℃ %smW", celsius, Math.round(power));
+                        String tempString = String.format(" %s℃ %s", celsius, powerString);
                         tempTextView.setText(tempString);
                     }
                 }
