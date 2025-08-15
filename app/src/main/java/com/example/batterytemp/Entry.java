@@ -3,12 +3,12 @@ package com.example.batterytemp;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.ColorStateList;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -60,7 +60,7 @@ public class Entry implements IXposedHookLoadPackage {
                 }
             });
 
-            // 最终解决方案：Hook NetworkSpeedView 子 TextView 的 setTextColor(int) 方法
+            // Hook NetworkSpeedView 的子 TextView 的 setTextColor(int) 方法
             final Class<?> networkSpeedViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.views.NetworkSpeedView",
                     lpparam.classLoader
@@ -77,7 +77,6 @@ public class Entry implements IXposedHookLoadPackage {
                                 // 确认是网速视图的子TextView后，更新我们的TextView
                                 int color = (int) param.args[0];
                                 tempTextView.setTextColor(color);
-                                XposedBridge.log("BatteryTemp DEBUG: Text color updated via NetworkSpeedView's child TextView hook (int).");
                             }
                         }
                     }
@@ -96,13 +95,24 @@ public class Entry implements IXposedHookLoadPackage {
                 if (tempTextView != null && systemUiContext != null) {
                     Intent intent = systemUiContext.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
                     if (intent != null) {
+                        // 获取温度
                         int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
                         int celsius = Math.round(tempTenth / 10.0f);
-                        String tempString = " " + celsius + "℃";
+                        
+                        // 获取并计算功率
+                        BatteryManager batteryManager = (BatteryManager) systemUiContext.getSystemService(Context.BATTERY_SERVICE);
+                        int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
+                        int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
+                        
+                        // 计算功率，单位 mW
+                        float power = (float)voltage * (float)current / 1000000.0f;
+                        
+                        // 组合文本并更新UI
+                        String tempString = String.format(" %s℃ %smW", celsius, Math.round(power));
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 1000);
+                handler.postDelayed(this, 1000); // 1秒更新一次
             }
         });
     }
