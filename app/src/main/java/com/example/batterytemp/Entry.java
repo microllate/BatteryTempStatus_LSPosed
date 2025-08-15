@@ -103,14 +103,14 @@ public class Entry implements IXposedHookLoadPackage {
                         int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
                         
-                        // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
-                        float power = (float)voltage * (float)current / 1000.0f;
+                        // 计算功率，单位为瓦特 (W)。假设 voltage 为 mV，current 为 mA。
+                        float power = (float)voltage * (float)current / 1000000.0f;
                         
                         String powerString;
                         if (power > 0) {
-                            powerString = String.format("充电 %smW", Math.round(power));
+                            powerString = String.format("充电 %.1fW", power);
                         } else {
-                            powerString = String.format("耗电 %smW", Math.round(-power));
+                            powerString = String.format("耗电 %.1fW", -power);
                         }
                         
                         // 组合文本并更新UI
