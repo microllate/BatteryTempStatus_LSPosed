@@ -99,11 +99,11 @@ public class Entry implements IXposedHookLoadPackage {
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
                         
                         // 计算功率，单位为瓦特 (W)。
-                        // 假设 voltage 为 mV，current 为 μA。
-                        float power = (float)voltage * (float)current / 1000000000.0f;
+                        // 假设 voltage 为 mV，current 为 mA。
+                        float power = (float)voltage * (float)current / 1000000.0f;
                         
                         String powerString;
-                        if (current > 0) { // 如果电流是正值，说明正在充电
+                        if (current < 0) { // 如果电流是正值，说明正在充电
                             powerString = String.format("充电 %.1fW", power);
                         } else { // 如果电流是负值，说明正在放电
                             powerString = String.format("耗电 %.1fW", -power);
