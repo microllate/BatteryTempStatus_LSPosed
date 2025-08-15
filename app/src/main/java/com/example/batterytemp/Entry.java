@@ -4,11 +4,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.ColorStateList;
+import android.graphics.Rect;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -60,20 +62,20 @@ public class Entry implements IXposedHookLoadPackage {
                 }
             });
 
-            // Hook NetworkSpeedView 的方法来同步颜色变化
+            // Hook onDarkChanged 方法来同步颜色变化，这是最精准的方案
             final Class<?> networkSpeedViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.views.NetworkSpeedView",
                     lpparam.classLoader
             );
             
-            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "setTextColor",
-                ColorStateList.class, new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "onDarkChanged",
+                Rect.class, float.class, int.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         if (tempTextView != null) {
                             TextView networkSpeedView = (TextView) param.thisObject;
                             updateTextColor(networkSpeedView, tempTextView);
-                            XposedBridge.log("BatteryTemp DEBUG: Text color updated via NetworkSpeedView hook.");
+                            XposedBridge.log("BatteryTemp DEBUG: Text color updated via onDarkChanged.");
                         }
                     }
                 }
