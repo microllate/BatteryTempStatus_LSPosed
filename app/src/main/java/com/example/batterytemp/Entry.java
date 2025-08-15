@@ -4,13 +4,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.ColorStateList;
+import android.graphics.Canvas;
 import android.graphics.Rect;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -62,24 +62,35 @@ public class Entry implements IXposedHookLoadPackage {
                 }
             });
 
-            // Hook onDarkChanged 方法来同步颜色变化，这是最精准的方案
+            // Hook onDarkChanged 和 onDraw，确保颜色同步
             final Class<?> networkSpeedViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.views.NetworkSpeedView",
                     lpparam.classLoader
             );
             
-            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "onDarkChanged",
-                Rect.class, float.class, int.class, new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (tempTextView != null) {
-                            TextView networkSpeedView = (TextView) param.thisObject;
-                            updateTextColor(networkSpeedView, tempTextView);
-                            XposedBridge.log("BatteryTemp DEBUG: Text color updated via onDarkChanged.");
-                        }
+            // 尝试 Hook onDarkChanged，不指定参数
+            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "onDarkChanged", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    if (tempTextView != null) {
+                        TextView networkSpeedView = (TextView) param.thisObject;
+                        updateTextColor(networkSpeedView, tempTextView);
+                        XposedBridge.log("BatteryTemp DEBUG: Text color updated via onDarkChanged (general hook).");
                     }
                 }
-            );
+            });
+
+            // 备用方案：Hook onDraw
+            XposedHelpers.findAndHookMethod(networkSpeedViewClazz, "onDraw", Canvas.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    if (tempTextView != null) {
+                        TextView networkSpeedView = (TextView) param.thisObject;
+                        updateTextColor(networkSpeedView, tempTextView);
+                        XposedBridge.log("BatteryTemp DEBUG: Text color updated via onDraw hook.");
+                    }
+                }
+            });
 
         } catch (Throwable t) {
             XposedBridge.log("BatteryTemp DEBUG: hook failed: " + t);
