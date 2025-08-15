@@ -104,9 +104,9 @@ public class Entry implements IXposedHookLoadPackage {
                         
                         String powerString;
                         if (current < 0) { // 如果电流是正值，说明正在充电
-                            powerString = String.format("充电 %.1fW", power);
+                            powerString = String.format("充电 %.2fW", power);
                         } else { // 如果电流是负值，说明正在放电
-                            powerString = String.format("耗电 %.1fW", -power);
+                            powerString = String.format("耗电 %.2fW", -power);
                         }
                         
                         String tempString = String.format(" %s℃ %s", celsius, powerString);
