@@ -20,7 +20,7 @@ public class Entry implements IXposedHookLoadPackage {
 
     private static final String PKG_SYSTEMUI = "com.android.systemui";
     private TextView tempTextView = null;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Handler handler; // 将声明和初始化分开
     private Context systemUiContext;
 
     @Override
@@ -36,10 +36,14 @@ public class Entry implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(clazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    // 在这里初始化 Handler
+                    if (handler == null) {
+                        handler = new Handler(Looper.getMainLooper());
+                    }
+
                     ViewGroup statusBarView = (ViewGroup) param.thisObject;
                     systemUiContext = statusBarView.getContext();
 
-                    // 使用你提供的 ID 0x7f0a082f 直接定位左侧容器
                     ViewGroup leftSideGroup = (ViewGroup) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a082f);
 
                     if (leftSideGroup != null) {
@@ -47,7 +51,6 @@ public class Entry implements IXposedHookLoadPackage {
                         tempTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
                         tempTextView.setPadding(0, 0, 10, 0);
 
-                        // 将 TextView 添加到左侧容器中
                         leftSideGroup.addView(tempTextView, 3);
                         XposedBridge.log("BatteryTemp DEBUG: TextView added to left side of status bar.");
                         
