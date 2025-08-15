@@ -97,7 +97,7 @@ public class Entry implements IXposedHookLoadPackage {
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 5000);
+                handler.postDelayed(this, 1000);
             }
         });
     }
