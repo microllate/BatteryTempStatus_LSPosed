@@ -21,6 +21,7 @@ public class Entry implements IXposedHookLoadPackage {
 
     private static final String PKG_SYSTEMUI = "com.android.systemui";
     private TextView tempTextView = null;
+    private ViewGroup statusBarView = null; // 用于在 animateColorChange Hook 中访问状态栏
     private Handler handler;
     private Context systemUiContext;
 
@@ -29,59 +30,55 @@ public class Entry implements IXposedHookLoadPackage {
         if (!PKG_SYSTEMUI.equals(lpparam.packageName)) return;
 
         try {
-            final Class<?> clazz = XposedHelpers.findClass(
+            // Hook onFinishInflate 方法来添加我们的 TextView
+            final Class<?> miuiStatusBarViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.phone.MiuiPhoneStatusBarView",
                     lpparam.classLoader
             );
-
-            XposedHelpers.findAndHookMethod(clazz, "onFinishInflate", new XC_MethodHook() {
+            
+            XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     if (handler == null) {
                         handler = new Handler(Looper.getMainLooper());
                     }
-
-                    ViewGroup statusBarView = (ViewGroup) param.thisObject;
+                    
+                    statusBarView = (ViewGroup) param.thisObject;
                     systemUiContext = statusBarView.getContext();
 
-                    // 使用你提供的 ID 0x7f0a082f 直接定位左侧容器
                     ViewGroup leftSideGroup = (ViewGroup) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a082f);
 
                     if (leftSideGroup != null) {
                         tempTextView = new TextView(systemUiContext);
-                        
-                        // 使用你找到的 ID 0x7f0a023d 直接定位时钟控件
-                        TextView clockView = (TextView) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a023d);
-                        
-                        if (clockView != null) {
-                            ColorStateList textColor = clockView.getTextColors();
-                            if (textColor != null) {
-                                tempTextView.setTextColor(textColor);
-                            }
-                            tempTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, clockView.getTextSize() / systemUiContext.getResources().getDisplayMetrics().scaledDensity);
-                            
-                            // 继承时钟的字体家族，使显示效果更统一
-                            // Typeface typeface = clockView.getTypeface();
-                            // if (typeface != null) {
-                            //     tempTextView.setTypeface(typeface);
-                            // }
-                        } else {
-                            // 如果找不到时钟，则使用默认值
-                            tempTextView.setTextColor(0xFFFFFFFF); // 白色
-                            tempTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-                        }
-
+                        updateTextColorAndSize(statusBarView, tempTextView);
                         tempTextView.setPadding(0, 0, 10, 0);
-
                         leftSideGroup.addView(tempTextView, 3);
                         XposedBridge.log("BatteryTemp DEBUG: TextView added to left side of status bar.");
-                        
                         startTempUpdate();
                     } else {
                         XposedBridge.log("BatteryTemp DEBUG: Left side container with ID 0x7f0a082f not found.");
                     }
                 }
             });
+
+            // Hook animateColorChange 方法来同步颜色
+            final Class<?> animatableClockViewClazz = XposedHelpers.findClass(
+                    "com.android.systemui.shared.clocks.AnimatableClockView",
+                    lpparam.classLoader
+            );
+            
+            XposedHelpers.findAndHookMethod(animatableClockViewClazz, "animateColorChange",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        if (tempTextView != null && statusBarView != null) {
+                            updateTextColorAndSize(statusBarView, tempTextView);
+                            XposedBridge.log("BatteryTemp DEBUG: Text color updated due to animateColorChange.");
+                        }
+                    }
+                }
+            );
+
         } catch (Throwable t) {
             XposedBridge.log("BatteryTemp DEBUG: hook failed: " + t);
         }
@@ -103,5 +100,20 @@ public class Entry implements IXposedHookLoadPackage {
                 handler.postDelayed(this, 5000);
             }
         });
+    }
+
+    private void updateTextColorAndSize(ViewGroup parent, TextView targetTextView) {
+        TextView clockView = (TextView) XposedHelpers.callMethod(parent, "findViewById", 0x7f0a023d);
+        if (clockView != null) {
+            ColorStateList textColor = clockView.getTextColors();
+            if (textColor != null) {
+                targetTextView.setTextColor(textColor);
+            }
+            float fontSize = clockView.getTextSize() / systemUiContext.getResources().getDisplayMetrics().scaledDensity;
+            targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize);
+        } else {
+            targetTextView.setTextColor(0xFFFFFFFF);
+            targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        }
     }
 }
