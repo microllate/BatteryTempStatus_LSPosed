@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -21,7 +22,7 @@ public class Entry implements IXposedHookLoadPackage {
 
     private static final String PKG_SYSTEMUI = "com.android.systemui";
     private TextView tempTextView = null;
-    private ViewGroup statusBarView = null; // 用于在 animateColorChange Hook 中访问状态栏
+    private ViewGroup statusBarView = null;
     private Handler handler;
     private Context systemUiContext;
 
@@ -30,12 +31,12 @@ public class Entry implements IXposedHookLoadPackage {
         if (!PKG_SYSTEMUI.equals(lpparam.packageName)) return;
 
         try {
-            // Hook onFinishInflate 方法来添加我们的 TextView
             final Class<?> miuiStatusBarViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.phone.MiuiPhoneStatusBarView",
                     lpparam.classLoader
             );
             
+            // Hook onFinishInflate 方法，用于初始化和添加 TextView
             XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -60,20 +61,15 @@ public class Entry implements IXposedHookLoadPackage {
                     }
                 }
             });
-
-            // Hook animateColorChange 方法来同步颜色
-            final Class<?> animatableClockViewClazz = XposedHelpers.findClass(
-                    "com.android.systemui.shared.clocks.AnimatableClockView",
-                    lpparam.classLoader
-            );
             
-            XposedHelpers.findAndHookMethod(animatableClockViewClazz, "animateColorChange",
-                new XC_MethodHook() {
+            // Hook onConfigurationChanged 方法来同步颜色
+            XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onConfigurationChanged",
+                Configuration.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         if (tempTextView != null && statusBarView != null) {
                             updateTextColorAndSize(statusBarView, tempTextView);
-                            XposedBridge.log("BatteryTemp DEBUG: Text color updated due to animateColorChange.");
+                            XposedBridge.log("BatteryTemp DEBUG: Text color updated due to onConfigurationChanged.");
                         }
                     }
                 }
@@ -97,7 +93,7 @@ public class Entry implements IXposedHookLoadPackage {
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 1000);
+                handler.postDelayed(this, 1000); // 更改为1秒更新一次
             }
         });
     }
