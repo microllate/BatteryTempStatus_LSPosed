@@ -104,7 +104,7 @@ public class Entry implements IXposedHookLoadPackage {
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
                         
                         // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
-                        float power = (float)voltage * (float)current / 10000000.0f;
+                        float power = (float)voltage * (float)current / 1000000.0f;
                         
                         String powerString;
                         if (power < 0) {
