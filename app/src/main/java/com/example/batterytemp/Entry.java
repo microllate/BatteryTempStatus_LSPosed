@@ -3,6 +3,7 @@ package com.example.batterytemp;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.ColorStateList;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -33,6 +34,7 @@ public class Entry implements IXposedHookLoadPackage {
                     lpparam.classLoader
             );
             
+            // Hook onFinishInflate 方法，用于添加 TextView
             XposedHelpers.findAndHookMethod(miuiStatusBarViewClazz, "onFinishInflate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -58,6 +60,7 @@ public class Entry implements IXposedHookLoadPackage {
                 }
             });
 
+            // Hook NetworkSpeedView 的子 TextView 的 setTextColor(int) 方法
             final Class<?> networkSpeedViewClazz = XposedHelpers.findClass(
                     "com.android.systemui.statusbar.views.NetworkSpeedView",
                     lpparam.classLoader
@@ -91,29 +94,31 @@ public class Entry implements IXposedHookLoadPackage {
                 if (tempTextView != null && systemUiContext != null) {
                     Intent intent = systemUiContext.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
                     if (intent != null) {
+                        // 获取温度
                         int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
                         int celsius = Math.round(tempTenth / 10.0f);
                         
+                        // 获取电压和电流
                         BatteryManager batteryManager = (BatteryManager) systemUiContext.getSystemService(Context.BATTERY_SERVICE);
                         int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
                         
-                        // 计算功率，单位为瓦特 (W)。
-                        // 假设 voltage 为 mV，current 为 mA。
-                        float power = (float)voltage * (float)current / 1000000.0f;
+                        // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
+                        float power = (float)voltage * (float)current / 10.0f;
                         
                         String powerString;
-                        if (current < 0) { // 如果电流是正值，说明正在充电
-                            powerString = String.format("充电 %.2fW", power);
-                        } else { // 如果电流是负值，说明正在放电
-                            powerString = String.format("耗电 %.2fW", -power);
+                        if (power < 0) {
+                            powerString = String.format("充电 %smW", Math.round(power));
+                        } else {
+                            powerString = String.format("耗电 %smW", Math.round(-power));
                         }
                         
+                        // 组合文本并更新UI
                         String tempString = String.format(" %s℃ %s", celsius, powerString);
                         tempTextView.setText(tempString);
                     }
                 }
-                handler.postDelayed(this, 1000);
+                handler.postDelayed(this, 1000); // 1秒更新一次
             }
         });
     }
