@@ -82,38 +82,6 @@ public class Entry implements IXposedHookLoadPackage {
                 }
             );
 
-    // 在你的 handleLoadPackage 方法中
-final Class<?> miuiKeyguardStatusBarViewClazz = XposedHelpers.findClass(
-    "com.android.systemui.statusbar.phone.MiuiKeyguardStatusBarView",
-    lpparam.classLoader
-);
-
-// Hook onFinishInflate 方法，用于在视图加载完成后修改其位置
-XposedHelpers.findAndHookMethod(miuiKeyguardStatusBarViewClazz, "onFinishInflate", new XC_MethodHook() {
-    @Override
-    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-        ViewGroup keyguardStatusBar = (ViewGroup) param.thisObject;
-
-        // 使用十六进制 ID 找到闹钟图标
-        int alarmIconId = 0x7f0a00ab; // 这是 XML 文件中 ImageView 的 ID
-        View alarmIcon = keyguardStatusBar.findViewById(alarmIconId);
-
-        if (alarmIcon != null) {
-            // 获取视图的布局参数
-            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) alarmIcon.getLayoutParams();
-            
-            // 示例：向右移动 50 像素，您可以调整这个值
-            params.leftMargin += 50; 
-            
-            // 应用新的布局参数
-            alarmIcon.setLayoutParams(params);
-
-            XposedBridge.log("已成功修改锁屏闹钟图标位置。");
-        } else {
-            XposedBridge.log("未能找到闹钟图标，请检查 ID 是否正确。");
-        }
-    }
-});
 
         } catch (Throwable t) {
             XposedBridge.log("BatteryTemp DEBUG: hook failed: " + t);
