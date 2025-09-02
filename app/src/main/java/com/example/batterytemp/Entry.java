@@ -98,31 +98,23 @@ public class Entry implements IXposedHookLoadPackage {
                         // 获取温度
                         int tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
                         int celsius = Math.round(tempTenth / 10.0f);
-                        
+                        int voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1);//改为广播获取电压
                         // 获取电压和电流
                         BatteryManager batteryManager = (BatteryManager) systemUiContext.getSystemService(Context.BATTERY_SERVICE);
-                        int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
-                        int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
+                        //int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);其实是电流值
+                        int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
 
-                        long rawMicroV = readLongWithSu("/sys/class/power_supply/battery/voltage_now");
-                        long rawMicroA = readLongWithSu("/sys/class/power_supply/battery/current_now");
+                        //long rawMicroV = readLongWithSu("/sys/class/power_supply/battery/voltage_now");
+                        //long rawMicroA = readLongWithSu("/sys/class/power_supply/battery/current_now");
 
-                        XposedBridge.log("电流: " + current );
-                        XposedBridge.log("电压: " + voltage );
-                        XposedBridge.log("sys电流: " + rawMicroA );
-                        XposedBridge.log("sys电压: " + rawMicroV );
+                        //XposedBridge.log("电流: " + current );
+                        //XposedBridge.log("电压: " + voltage );
+                        //XposedBridge.log("sys电流: " + rawMicroA );
+                        //XposedBridge.log("sys电压: " + rawMicroV );
 
-                        for (int id = 0; id <= 20; id++) {
-                         try {
-                             int value = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", id);
-                             XposedBridge.log("getIntProperty id=" + id + " value=" + value);
-                         } catch (Throwable t) {
-                             XposedBridge.log("id=" + id + " 调用异常: " + t);
-                         }
-                       }
-                        
+                                                
                         // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
-                        float power = (float)voltage * (float)current / 10000000.0f;
+                        float power = (float)voltage * (float)current / 1000000000.0f;
                         
                         String powerString;
                         if (power < 0) {
