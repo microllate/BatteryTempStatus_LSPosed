@@ -103,6 +103,14 @@ public class Entry implements IXposedHookLoadPackage {
                         BatteryManager batteryManager = (BatteryManager) systemUiContext.getSystemService(Context.BATTERY_SERVICE);
                         int voltage = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 2);
                         int current = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", 4);
+
+                        long rawMicroV = readLongWithSu("/sys/class/power_supply/battery/voltage_now");
+                        long rawMicroA = readLongWithSu("/sys/class/power_supply/battery/current_now");
+
+                        XposedBridge.log("电流: " + current );
+                        XposedBridge.log("电压: " + voltage );
+                        XposedBridge.log("sys电流: " + rawMicroA );
+                        XposedBridge.log("sys电压: " + rawMicroV );
                         
                         // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
                         float power = (float)voltage * (float)current / 10000000.0f;
@@ -134,5 +142,37 @@ public class Entry implements IXposedHookLoadPackage {
             targetTextView.setTextColor(0xFFFFFFFF);
             targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         }
+    }
+
+    private static long readLongWithSu(String path) {
+        java.io.BufferedReader br = null;
+        java.io.BufferedReader errBr = null;
+        try {
+            // 使用 sh 作为桥梁来执行 su
+            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", "su -c 'cat " + path + "'"});
+
+            br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+            errBr = new java.io.BufferedReader(new java.io.InputStreamReader(p.getErrorStream()));
+
+            String line = br.readLine();
+            int exitCode = p.waitFor();
+
+            String errorLine;
+            while ((errorLine = errBr.readLine()) != null) {
+                XposedBridge.log("su 错误流: " + errorLine);
+            }
+
+            if (exitCode == 0 && line != null) {
+                return Long.parseLong(line.trim());
+            } else {
+                XposedBridge.log("su 读取失败: " + path + " exit=" + exitCode + " line=" + line);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("su 读取异常: " + path + " -> " + t);
+        } finally {
+            try { if (br != null) br.close(); } catch (Throwable ignored) {}
+            try { if (errBr != null) errBr.close(); } catch (Throwable ignored) {}
+        }
+        return -1;
     }
 }
