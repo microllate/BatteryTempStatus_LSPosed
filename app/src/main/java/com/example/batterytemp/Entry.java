@@ -111,6 +111,15 @@ public class Entry implements IXposedHookLoadPackage {
                         XposedBridge.log("电压: " + voltage );
                         XposedBridge.log("sys电流: " + rawMicroA );
                         XposedBridge.log("sys电压: " + rawMicroV );
+
+                        for (int id = 0; id <= 20; id++) {
+                         try {
+                             int value = (int) XposedHelpers.callMethod(batteryManager, "getIntProperty", id);
+                             XposedBridge.log("getIntProperty id=" + id + " value=" + value);
+                         } catch (Throwable t) {
+                             XposedBridge.log("id=" + id + " 调用异常: " + t);
+                         }
+                       }
                         
                         // 计算功率，单位为毫瓦 (mW)。假设 voltage 为 mV，current 为 mA。
                         float power = (float)voltage * (float)current / 10000000.0f;
