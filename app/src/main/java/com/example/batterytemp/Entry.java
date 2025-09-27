@@ -45,7 +45,7 @@ public class Entry implements IXposedHookLoadPackage {
                     statusBarView = (ViewGroup) param.thisObject;
                     systemUiContext = statusBarView.getContext();
 
-                    ViewGroup leftSideGroup = (ViewGroup) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a082f);
+                    ViewGroup leftSideGroup = (ViewGroup) XposedHelpers.callMethod(statusBarView, "findViewById", 0x7f0a082e);
 
                     if (leftSideGroup != null) {
                         tempTextView = new TextView(systemUiContext);
