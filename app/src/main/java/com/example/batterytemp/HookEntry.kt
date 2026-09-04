@@ -79,7 +79,7 @@ class HookEntry : IYukiHookXposedInit {
                                     val tempView = TextView(context)
                                     tempView.setTag(TAG_KEY, true)
                                     tempView.setSingleLine(true)
-                                    applyClockStyle(statusBarView, tempView)
+                                    applyNetworkSpeedStyle(statusBarView, tempView)
                                     tempView.setPadding(0, 0, dp(context, 10), 0)
 
                                     val insertIndex = minOf(3, leftSideGroup.childCount)
@@ -92,7 +92,7 @@ class HookEntry : IYukiHookXposedInit {
                                             "index=$insertIndex"
                                     )
 
-                                    startTemperatureUpdater(context, tempView)
+                                    startTemperatureUpdater(statusBarView, tempView)
                                 } catch (e: Throwable) {
                                     loggerD(msg = "BatteryTemp: injection failed: ${e.stackTraceToString()}")
                                 }
@@ -139,38 +139,65 @@ class HookEntry : IYukiHookXposedInit {
             return null
         }
 
-        private fun applyClockStyle(parent: ViewGroup, target: TextView) {
-            val clock = findTextViewByResourceName(parent, "clock")
-            if (clock != null) {
-                target.setTextColor(clock.currentTextColor)
-                val fontSize = clock.textSize /
+        private fun applyNetworkSpeedStyle(parent: ViewGroup, target: TextView) {
+            val networkSpeedText = findNetworkSpeedTextView(parent)
+            if (networkSpeedText != null) {
+                target.setTextColor(networkSpeedText.currentTextColor)
+                val fontSize = networkSpeedText.textSize /
                     parent.context.resources.displayMetrics.scaledDensity
-                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                if (fontSize > 0f) {
+                    target.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                }
+                loggerD(
+                    msg = "BatteryTemp: synced style from network speed " +
+                        "${networkSpeedText.javaClass.name} id=${resourceName(networkSpeedText)} " +
+                        "color=${networkSpeedText.currentTextColor}"
+                )
             } else {
                 target.setTextColor(0xFFFFFFFF.toInt())
                 target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                loggerD(msg = "BatteryTemp: network speed TextView not found, using fallback style")
             }
         }
 
-        private fun findTextViewByResourceName(root: ViewGroup, targetName: String): TextView? {
-            if (root is TextView && resourceName(root) == targetName) return root
+        private fun findNetworkSpeedTextView(root: ViewGroup): TextView? {
+            val className = root.javaClass.name
+            if (className.contains("NetworkSpeedView", ignoreCase = true)) {
+                findFirstTextView(root)?.let { return it }
+            }
+
             for (index in 0 until root.childCount) {
                 val child = root.getChildAt(index)
-                if (child is TextView && resourceName(child) == targetName) return child
                 if (child is ViewGroup) {
-                    findTextViewByResourceName(child, targetName)?.let { return it }
+                    findNetworkSpeedTextView(child)?.let { return it }
                 }
             }
             return null
         }
 
-        private fun startTemperatureUpdater(context: Context, target: TextView) {
+        private fun findFirstTextView(root: ViewGroup): TextView? {
+            if (root is TextView) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is TextView) return child
+                if (child is ViewGroup) {
+                    findFirstTextView(child)?.let { return it }
+                }
+            }
+            return null
+        }
+
+        private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
             val handler = Handler(Looper.getMainLooper())
             val update = object : Runnable {
                 override fun run() {
                     if (!target.isAttachedToWindow) return
                     try {
-                        val intent = context.registerReceiver(
+                        // Network speed color can change dynamically with SystemUI theme/state.
+                        // Re-sync it periodically instead of using the clock's color.
+                        syncNetworkSpeedColor(parent, target)
+
+                        val intent = parent.context.registerReceiver(
                             null,
                             IntentFilter(Intent.ACTION_BATTERY_CHANGED)
                         )
@@ -183,7 +210,7 @@ class HookEntry : IYukiHookXposedInit {
                         if (tempTenth != Int.MIN_VALUE) {
                             val celsius = Math.round(tempTenth / 10.0f)
                             val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
-                            val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                            val batteryManager = parent.context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
                             val current = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                                 ?: Int.MIN_VALUE
 
@@ -204,6 +231,15 @@ class HookEntry : IYukiHookXposedInit {
                 }
             }
             handler.post(update)
+        }
+
+        private fun syncNetworkSpeedColor(parent: ViewGroup, target: TextView) {
+            val networkSpeedText = findNetworkSpeedTextView(parent) ?: return
+            val color = networkSpeedText.currentTextColor
+            if (target.currentTextColor != color) {
+                target.setTextColor(color)
+                loggerD(msg = "BatteryTemp: network speed color updated: $color")
+            }
         }
 
         private fun dp(context: Context, value: Int): Int =
