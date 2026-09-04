@@ -15,9 +15,7 @@ import org.luckypray.dexkit.query.enums.StringMatchType
 @InjectYukiHookWithXposed
 class HookEntry : IYukiHookXposedInit {
 
-    override fun onInit() = configs {
-        isDebug = true
-    }
+    override fun onInit() = configs { isDebug = true }
 
     override fun onHook() = encase {
         loadApp(name = "com.android.systemui") {
@@ -26,14 +24,12 @@ class HookEntry : IYukiHookXposedInit {
                     loggerD(msg = "BatteryTemp: SystemUI classLoader is null")
                     return@loadApp
                 }
-
                 val apkPath = appInfo.sourceDir
                 loggerD(msg = "BatteryTemp: DexKit scanning SystemUI: $apkPath")
                 System.loadLibrary("dexkit")
 
                 DexKitBridge.create(apkPath).use { bridge ->
                     loggerD(msg = "BatteryTemp: DexKit initialized, dexCount=${bridge.getDexNum()}")
-
                     val targetData = bridge.findClass {
                         searchPackages("com.android.systemui")
                         matcher {
@@ -59,15 +55,10 @@ class HookEntry : IYukiHookXposedInit {
 
                     findClass(targetClass.name).hook {
                         injectMember {
-                            method {
-                                name = "onFinishInflate"
-                            }
-
+                            method { name = "onFinishInflate" }
                             afterHook {
                                 try {
-                                    val statusBarView = instance as? ViewGroup
-                                        ?: return@afterHook
-
+                                    val statusBarView = instance as? ViewGroup ?: return@afterHook
                                     loggerD(msg = "BatteryTemp: ===== STATUS BAR STRUCTURE BEGIN =====")
                                     dumpViewGroupFields(statusBarView)
                                     loggerD(msg = "BatteryTemp: root childCount=${statusBarView.childCount}")
@@ -79,7 +70,6 @@ class HookEntry : IYukiHookXposedInit {
                             }
                         }
                     }
-
                     loggerD(msg = "BatteryTemp: SystemUI hook initialized successfully")
                 }
             } catch (e: Throwable) {
@@ -98,8 +88,7 @@ class HookEntry : IYukiHookXposedInit {
                     try {
                         field.isAccessible = true
                         val value = field.get(root) as? ViewGroup ?: continue
-                        if (value === root) return@forEachField
-
+                        if (value === root) continue
                         loggerD(
                             msg = "BatteryTemp: FIELD ${field.name} type=${field.type.name} " +
                                 "value=${value.javaClass.name} childCount=${value.childCount} " +
@@ -120,8 +109,7 @@ class HookEntry : IYukiHookXposedInit {
                 val text = (child as? TextView)?.text?.toString()?.replace("\n", "\\n")
                 loggerD(
                     msg = "BatteryTemp:   CHILD[$index] class=${child.javaClass.name} " +
-                        "id=${resourceName(child)} text=${text ?: "<none>"} " +
-                        "shown=${child.isShown}"
+                        "id=${resourceName(child)} text=${text ?: "<none>"} shown=${child.isShown}"
                 )
             }
         }
@@ -141,13 +129,10 @@ class HookEntry : IYukiHookXposedInit {
             }
         }
 
-        private fun resourceName(view: View): String {
-            return try {
-                if (view.id == View.NO_ID) "NO_ID"
-                else view.resources.getResourceEntryName(view.id)
-            } catch (_: Throwable) {
-                "id=${view.id}"
-            }
+        private fun resourceName(view: View): String = try {
+            if (view.id == View.NO_ID) "NO_ID" else view.resources.getResourceEntryName(view.id)
+        } catch (_: Throwable) {
+            "id=${view.id}"
         }
     }
 }
