@@ -182,10 +182,6 @@ class HookEntry : IYukiHookXposedInit {
 
                         if (tempTenth != Int.MIN_VALUE) {
                             val celsius = Math.round(tempTenth / 10.0f)
-
-                            // Keep the original implementation's power calculation:
-                            // voltage from ACTION_BATTERY_CHANGED is in mV, while
-                            // BATTERY_PROPERTY_CURRENT_NOW is in microamps.
                             val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
                             val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
                             val current = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
@@ -193,11 +189,7 @@ class HookEntry : IYukiHookXposedInit {
 
                             if (voltage >= 0 && current != Int.MIN_VALUE) {
                                 val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
-                                val powerString = if (power < 0) {
-                                    String.format(Locale.getDefault(), "充电 %.2fW", power)
-                                } else {
-                                    String.format(Locale.getDefault(), "耗电 %.2fW", power)
-                                }
+                                val powerString = String.format(Locale.getDefault(), "%.2fW", power)
                                 target.text = String.format(Locale.getDefault(), " %s℃ %s", celsius, powerString)
                             } else {
                                 target.text = " ${celsius}℃"
