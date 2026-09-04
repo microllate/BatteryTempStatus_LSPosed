@@ -95,7 +95,7 @@ class HookEntry : IYukiHookXposedInit {
                                     leftSideGroup.addView(tempView, insertIndex)
 
                                     loggerD(
-                                        msg = "BatteryTemp: test TextView added to left side"
+                                        msg = "BatteryTemp: test TextView added to left side field"
                                     )
                                 } catch (e: Throwable) {
                                     loggerD(
@@ -120,12 +120,17 @@ class HookEntry : IYukiHookXposedInit {
         private const val VIEW_TAG = "battery_temp_overlay"
 
         /**
-         * Resolve the left-side status-bar container without depending on a
-         * compiled SystemUI resource id. We prefer semantic view names and
-         * fall back to structural matching for HyperOS variants.
+         * Resolve the actual container held by MiuiPhoneStatusBarView instead
+         * of guessing from the rendered View tree. The field is discovered at
+         * runtime, so no compiled SystemUI resource id is required.
          */
         private fun findLeftSideGroup(statusBarView: ViewGroup): ViewGroup? {
-            val named = findGroupByResourceName(
+            findViewGroupField(statusBarView)?.let { return it }
+
+            // Some HyperOS builds do not keep the container as a direct field.
+            // Resource names are used only as a compatibility fallback and are
+            // resolved dynamically from the active SystemUI Resources instance.
+            return findGroupByResourceName(
                 statusBarView,
                 setOf(
                     "left_side",
@@ -135,9 +140,48 @@ class HookEntry : IYukiHookXposedInit {
                     "status_bar_left"
                 )
             )
-            if (named != null) return named
+        }
 
-            return findLikelyLeftGroup(statusBarView)
+        private fun findViewGroupField(root: ViewGroup): ViewGroup? {
+            var best: ViewGroup? = null
+            var bestScore = Int.MIN_VALUE
+
+            var type: Class<*>? = root.javaClass
+            while (type != null && type != Any::class.java) {
+                for (field in type.declaredFields) {
+                    if (!ViewGroup::class.java.isAssignableFrom(field.type)) continue
+
+                    try {
+                        field.isAccessible = true
+                        val value = field.get(root) as? ViewGroup ?: continue
+                        if (value === root) continue
+
+                        val name = field.name.lowercase()
+                        var score = 0
+                        if (name.contains("left")) score += 100
+                        if (name.contains("status")) score += 30
+                        if (name.contains("side")) score += 20
+                        if (name.contains("group") || name.contains("container")) score += 10
+
+                        val clock = findClockTextView(value)
+                        if (clock != null) score += 80
+                        if (value.childCount >= 2) score += 5
+
+                        if (score > bestScore) {
+                            bestScore = score
+                            best = value
+                        }
+                    } catch (_: Throwable) {
+                        // Hidden/inaccessible fields are expected on some ROMs.
+                    }
+                }
+                type = type.superclass
+            }
+
+            if (best != null) {
+                loggerD(msg = "BatteryTemp: resolved ViewGroup field: ${best.javaClass.name}")
+            }
+            return best
         }
 
         private fun findGroupByResourceName(
@@ -166,56 +210,6 @@ class HookEntry : IYukiHookXposedInit {
             }
 
             return visit(root)
-        }
-
-        /**
-         * Structural fallback for SystemUI versions whose resource names are
-         * obfuscated/changed. The old implementation inserted into the third
-         * child of a left-side group, so prefer shallow horizontal containers
-         * with several TextView-like children and a clock-looking child.
-         */
-        private fun findLikelyLeftGroup(root: ViewGroup): ViewGroup? {
-            var best: ViewGroup? = null
-            var bestScore = Int.MIN_VALUE
-
-            fun visit(view: View, depth: Int) {
-                if (depth > 5) return
-                if (view is ViewGroup) {
-                    var textCount = 0
-                    var visibleCount = 0
-                    var score = 0
-
-                    for (index in 0 until view.childCount) {
-                        val child = view.getChildAt(index)
-                        if (child.visibility == View.VISIBLE) visibleCount++
-                        if (child is TextView) {
-                            textCount++
-                            val text = child.text?.toString().orEmpty()
-                            if (text.contains(":") || text.matches(Regex(".*\\d{1,2}.*"))) {
-                                score += 3
-                            }
-                        }
-                    }
-
-                    if (view.childCount >= 2) {
-                        score += textCount * 2
-                        score += visibleCount
-                        if (view.childCount >= 3) score += 2
-
-                        if (score > bestScore) {
-                            bestScore = score
-                            best = view
-                        }
-                    }
-
-                    for (index in 0 until view.childCount) {
-                        visit(view.getChildAt(index), depth + 1)
-                    }
-                }
-            }
-
-            visit(root, 0)
-            return best
         }
 
         private fun applyClockStyle(parent: ViewGroup, target: TextView) {
