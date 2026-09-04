@@ -1,6 +1,5 @@
 package com.example.batterytemp
 
-import android.app.Application
 import android.view.ViewGroup
 import android.widget.TextView
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
@@ -27,10 +26,8 @@ class HookEntry : IYukiHookXposedInit {
                     return@loadApp
                 }
 
-                val apkPath = getSystemUiApkPath() ?: run {
-                    loggerD(msg = "BatteryTemp: unable to get SystemUI APK path")
-                    return@loadApp
-                }
+                val apkPath = appInfo.sourceDir
+                loggerD(msg = "BatteryTemp: DexKit scanning SystemUI: $apkPath")
 
                 System.loadLibrary("dexkit")
 
@@ -44,13 +41,16 @@ class HookEntry : IYukiHookXposedInit {
                                 "MiuiPhoneStatusBarView",
                                 StringMatchType.Contains
                             )
-                            addMethod {
-                                name = "onFinishInflate"
-                                returnType = "void"
-                                paramCount = 0
+                            methods {
+                                add {
+                                    name("onFinishInflate")
+                                    returnType("void")
+                                    paramCount(0)
+                                }
                             }
                         }
-                    }.singleOrNull()
+                        findFirst = true
+                    }.firstOrNull()
 
                     if (targetData == null) {
                         loggerD(msg = "BatteryTemp: DexKit target class not found")
@@ -110,20 +110,6 @@ class HookEntry : IYukiHookXposedInit {
                     msg = "BatteryTemp: SystemUI hook failed: ${e.stackTraceToString()}"
                 )
             }
-        }
-    }
-
-    private fun getSystemUiApkPath(): String? {
-        return try {
-            val activityThread = Class.forName("android.app.ActivityThread")
-            val currentApplication = activityThread
-                .getDeclaredMethod("currentApplication")
-                .apply { isAccessible = true }
-                .invoke(null) as? Application
-            currentApplication?.applicationInfo?.sourceDir
-        } catch (e: Throwable) {
-            loggerD(msg = "BatteryTemp: failed to get SystemUI APK path: ${e.stackTraceToString()}")
-            null
         }
     }
 
