@@ -79,7 +79,7 @@ class HookEntry : IYukiHookXposedInit {
                                     val tempView = TextView(context)
                                     tempView.setTag(TAG_KEY, true)
                                     tempView.setSingleLine(true)
-                                    applyNetworkSpeedStyle(statusBarView, tempView)
+                                    applyBatteryStyle(statusBarView, tempView)
                                     tempView.setPadding(0, 0, dp(context, 10), 0)
 
                                     val insertIndex = minOf(3, leftSideGroup.childCount)
@@ -110,6 +110,7 @@ class HookEntry : IYukiHookXposedInit {
     companion object {
         private const val TAG_KEY = 0x42545431
         private const val REFRESH_MS = 2000L
+        private const val STYLE_REFRESH_MS = 200L
 
         private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
             val targetName = "phone_status_bar_left_container"
@@ -139,25 +140,88 @@ class HookEntry : IYukiHookXposedInit {
             return null
         }
 
-        private fun applyNetworkSpeedStyle(parent: ViewGroup, target: TextView) {
+        /**
+         * Size follows the actual battery percentage TextView, while color follows network speed.
+         * The percentage view is the correct visual reference for the right-side battery text.
+         */
+        private fun applyBatteryStyle(parent: ViewGroup, target: TextView) {
+            val batteryPercent = findBatteryPercentTextView(parent)
             val networkSpeedText = findNetworkSpeedTextView(parent)
+
             if (networkSpeedText != null) {
                 target.setTextColor(networkSpeedText.currentTextColor)
-                val fontSize = networkSpeedText.textSize /
-                    parent.context.resources.displayMetrics.scaledDensity
-                if (fontSize > 0f) {
-                    target.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
-                }
-                loggerD(
-                    msg = "BatteryTemp: synced style from network speed " +
-                        "${networkSpeedText.javaClass.name} id=${resourceName(networkSpeedText)} " +
-                        "color=${networkSpeedText.currentTextColor}"
-                )
             } else {
                 target.setTextColor(0xFFFFFFFF.toInt())
-                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                loggerD(msg = "BatteryTemp: network speed TextView not found, using fallback style")
             }
+
+            if (batteryPercent != null) {
+                val fontSizePx = batteryPercent.textSize
+                if (fontSizePx > 0f) {
+                    target.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSizePx)
+                }
+                loggerD(
+                    msg = "BatteryTemp: synced font from battery percent " +
+                        "${batteryPercent.javaClass.name} id=${resourceName(batteryPercent)} " +
+                        "sizePx=${batteryPercent.textSize}"
+                )
+            } else {
+                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                loggerD(msg = "BatteryTemp: battery percent TextView not found, using fallback size")
+            }
+        }
+
+        private fun findBatteryPercentTextView(root: ViewGroup): TextView? {
+            // Prefer the actual battery percentage TextView by resource/class semantics.
+            val idNames = arrayOf("battery_percent", "battery_percentage", "battery_level")
+            for (name in idNames) {
+                val found = findTextViewByResourceName(root, name)
+                if (found != null) return found
+            }
+
+            // On HyperOS the percentage may live inside MiuiBatteryMeterView or a related container.
+            if (root.javaClass.name.contains("BatteryMeterView", ignoreCase = true) ||
+                root.javaClass.name.contains("BatteryContainer", ignoreCase = true)) {
+                findPercentTextView(root)?.let { return it }
+            }
+
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is ViewGroup) {
+                    findBatteryPercentTextView(child)?.let { return it }
+                }
+            }
+            return null
+        }
+
+        private fun findPercentTextView(root: ViewGroup): TextView? {
+            if (root is TextView && looksLikePercentage(root)) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is TextView && looksLikePercentage(child)) return child
+                if (child is ViewGroup) {
+                    findPercentTextView(child)?.let { return it }
+                }
+            }
+            return null
+        }
+
+        private fun looksLikePercentage(view: TextView): Boolean {
+            val name = resourceName(view).lowercase(Locale.ROOT)
+            if (name.contains("percent") || name.contains("percentage")) return true
+            val text = view.text?.toString()?.trim() ?: return false
+            return text.endsWith("%") && text.length <= 5
+        }
+
+        private fun findTextViewByResourceName(root: ViewGroup, targetName: String): TextView? {
+            if (root is TextView && resourceName(root) == targetName) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is TextView && resourceName(child) == targetName) return child
+                if (child is ViewGroup) {
+                    findTextViewByResourceName(child, targetName)?.let { return it }
+                }
+            }
+            return null
         }
 
         private fun findNetworkSpeedTextView(root: ViewGroup): TextView? {
@@ -193,9 +257,7 @@ class HookEntry : IYukiHookXposedInit {
                 override fun run() {
                     if (!target.isAttachedToWindow) return
                     try {
-                        // Network speed color can change dynamically with SystemUI theme/state.
-                        // Re-sync it periodically instead of using the clock's color.
-                        syncNetworkSpeedColor(parent, target)
+                        syncBatteryStyle(parent, target)
 
                         val intent = parent.context.registerReceiver(
                             null,
@@ -233,12 +295,21 @@ class HookEntry : IYukiHookXposedInit {
             handler.post(update)
         }
 
-        private fun syncNetworkSpeedColor(parent: ViewGroup, target: TextView) {
-            val networkSpeedText = findNetworkSpeedTextView(parent) ?: return
-            val color = networkSpeedText.currentTextColor
-            if (target.currentTextColor != color) {
-                target.setTextColor(color)
-                loggerD(msg = "BatteryTemp: network speed color updated: $color")
+        private fun syncBatteryStyle(parent: ViewGroup, target: TextView) {
+            val batteryPercent = findBatteryPercentTextView(parent)
+            if (batteryPercent != null) {
+                val fontSizePx = batteryPercent.textSize
+                if (fontSizePx > 0f && target.textSize != fontSizePx) {
+                    target.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSizePx)
+                }
+            }
+
+            val networkSpeedText = findNetworkSpeedTextView(parent)
+            if (networkSpeedText != null) {
+                val color = networkSpeedText.currentTextColor
+                if (target.currentTextColor != color) {
+                    target.setTextColor(color)
+                }
             }
         }
 
