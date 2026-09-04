@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - refactor/yuki-hook-migration
   workflow_dispatch:
 
 jobs:
@@ -18,10 +19,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: 17
-          cache: 'gradle' # 加上这一行，可以提高 Gradle 依赖下载速度
+          cache: 'gradle'
 
-      # 使用 android-actions/setup-android@v2 替代了手动配置
-      # 它会处理 SDK 的下载、缓存、许可协议接受以及环境变量设置
       - name: Setup Android SDK
         uses: android-actions/setup-android@v2
         with:
@@ -33,14 +32,11 @@ jobs:
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
 
-      # 这一步通常不推荐，因为它会覆盖你的项目配置。
-      # 除非你确定需要强制使用某个版本的 Gradle，否则可以移除。
-      - name: Use Gradle Wrapper with official URL
-        run: |
-          sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip|' gradle/wrapper/gradle-wrapper.properties
-      
-      - name: Parallel Gradle build
-        run: ./gradlew clean lintVitalRelease assembleRelease --parallel --max-workers=4 --stacktrace
+      - name: Verify Gradle wrapper
+        run: ./gradlew --version
+
+      - name: Build release APK
+        run: ./gradlew clean assembleRelease --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
