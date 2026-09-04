@@ -18,6 +18,7 @@ import com.highcapable.yukihookapi.hook.log.loggerD
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.StringMatchType
+import java.util.Locale
 
 @InjectYukiHookWithXposed
 class HookEntry : IYukiHookXposedInit {
@@ -185,7 +186,7 @@ class HookEntry : IYukiHookXposedInit {
                             // Keep the original implementation's power calculation:
                             // voltage from ACTION_BATTERY_CHANGED is in mV, while
                             // BATTERY_PROPERTY_CURRENT_NOW is in microamps.
-                            val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+                            val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
                             val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
                             val current = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                                 ?: Int.MIN_VALUE
@@ -193,11 +194,11 @@ class HookEntry : IYukiHookXposedInit {
                             if (voltage >= 0 && current != Int.MIN_VALUE) {
                                 val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
                                 val powerString = if (power < 0) {
-                                    String.format("充电 %.2fW", power)
+                                    String.format(Locale.getDefault(), "充电 %.2fW", power)
                                 } else {
-                                    String.format("耗电 %.2fW", power)
+                                    String.format(Locale.getDefault(), "耗电 %.2fW", power)
                                 }
-                                target.text = String.format(" %s℃ %s", celsius, powerString)
+                                target.text = String.format(Locale.getDefault(), " %s℃ %s", celsius, powerString)
                             } else {
                                 target.text = " ${celsius}℃"
                             }
