@@ -1,5 +1,12 @@
 package com.example.batterytemp
 
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
+import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -59,13 +66,34 @@ class HookEntry : IYukiHookXposedInit {
                             afterHook {
                                 try {
                                     val statusBarView = instance as? ViewGroup ?: return@afterHook
-                                    loggerD(msg = "BatteryTemp: ===== STATUS BAR STRUCTURE BEGIN =====")
-                                    dumpViewGroupFields(statusBarView)
-                                    loggerD(msg = "BatteryTemp: root childCount=${statusBarView.childCount}")
-                                    dumpViewTree(statusBarView, 0, 5)
-                                    loggerD(msg = "BatteryTemp: ===== STATUS BAR STRUCTURE END =====")
+                                    if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
+
+                                    val leftSideGroup = findLeftSideGroup(statusBarView)
+                                    if (leftSideGroup == null) {
+                                        loggerD(msg = "BatteryTemp: left status bar container not found")
+                                        return@afterHook
+                                    }
+
+                                    val context = statusBarView.context
+                                    val tempView = TextView(context)
+                                    tempView.setTag(TAG_KEY, true)
+                                    tempView.setSingleLine(true)
+                                    applyClockStyle(statusBarView, tempView)
+                                    tempView.setPadding(0, 0, dp(context, 10), 0)
+
+                                    val insertIndex = minOf(3, leftSideGroup.childCount)
+                                    leftSideGroup.addView(tempView, insertIndex)
+                                    statusBarView.setTag(TAG_KEY, true)
+
+                                    loggerD(
+                                        msg = "BatteryTemp: injected into " +
+                                            "${leftSideGroup.javaClass.name} id=${resourceName(leftSideGroup)} " +
+                                            "index=$insertIndex"
+                                    )
+
+                                    startTemperatureUpdater(context, tempView)
                                 } catch (e: Throwable) {
-                                    loggerD(msg = "BatteryTemp: structure dump failed: ${e.stackTraceToString()}")
+                                    loggerD(msg = "BatteryTemp: injection failed: ${e.stackTraceToString()}")
                                 }
                             }
                         }
@@ -79,55 +107,92 @@ class HookEntry : IYukiHookXposedInit {
     }
 
     companion object {
-        private fun dumpViewGroupFields(root: ViewGroup) {
-            var type: Class<*>? = root.javaClass
-            while (type != null && type != Any::class.java) {
-                loggerD(msg = "BatteryTemp: CLASS ${type.name}")
-                for (field in type.declaredFields) {
-                    if (!ViewGroup::class.java.isAssignableFrom(field.type)) continue
+        private const val TAG_KEY = 0x42545431
+        private const val REFRESH_MS = 2000L
+
+        private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
+            val targetName = "phone_status_bar_left_container"
+            val targetId = try {
+                root.resources.getIdentifier(targetName, "id", root.context.packageName)
+            } catch (_: Throwable) {
+                0
+            }
+
+            if (targetId != 0) {
+                root.findViewById<View>(targetId)?.let { view ->
+                    if (view is ViewGroup) return view
+                }
+            }
+
+            return findViewGroupByResourceName(root, targetName)
+        }
+
+        private fun findViewGroupByResourceName(root: ViewGroup, targetName: String): ViewGroup? {
+            if (resourceName(root) == targetName) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is ViewGroup) {
+                    findViewGroupByResourceName(child, targetName)?.let { return it }
+                }
+            }
+            return null
+        }
+
+        private fun applyClockStyle(parent: ViewGroup, target: TextView) {
+            val clock = findTextViewByResourceName(parent, "clock")
+            if (clock != null) {
+                target.setTextColor(clock.currentTextColor)
+                val fontSize = clock.textSize /
+                    parent.context.resources.displayMetrics.scaledDensity
+                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+            } else {
+                target.setTextColor(0xFFFFFFFF.toInt())
+                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            }
+        }
+
+        private fun findTextViewByResourceName(root: ViewGroup, targetName: String): TextView? {
+            if (root is TextView && resourceName(root) == targetName) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is TextView && resourceName(child) == targetName) return child
+                if (child is ViewGroup) {
+                    findTextViewByResourceName(child, targetName)?.let { return it }
+                }
+            }
+            return null
+        }
+
+        private fun startTemperatureUpdater(context: Context, target: TextView) {
+            val handler = Handler(Looper.getMainLooper())
+            val update = object : Runnable {
+                override fun run() {
+                    if (!target.isAttachedToWindow) return
                     try {
-                        field.isAccessible = true
-                        val value = field.get(root) as? ViewGroup ?: continue
-                        if (value === root) continue
-                        loggerD(
-                            msg = "BatteryTemp: FIELD ${field.name} type=${field.type.name} " +
-                                "value=${value.javaClass.name} childCount=${value.childCount} " +
-                                "id=${resourceName(value)}"
+                        val intent = context.registerReceiver(
+                            null,
+                            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
                         )
-                        dumpDirectChildren(value)
+                        val tempTenth = intent?.getIntExtra(
+                            BatteryManager.EXTRA_TEMPERATURE,
+                            Int.MIN_VALUE
+                        ) ?: Int.MIN_VALUE
+
+                        if (tempTenth != Int.MIN_VALUE) {
+                            val celsius = Math.round(tempTenth / 10.0f)
+                            target.text = " ${celsius}℃"
+                        }
+                        handler.postDelayed(this, REFRESH_MS)
                     } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: FIELD ${field.name} <error ${e.javaClass.simpleName}>")
+                        loggerD(msg = "BatteryTemp: temperature update failed: ${e.stackTraceToString()}")
                     }
                 }
-                type = type.superclass
             }
+            handler.post(update)
         }
 
-        private fun dumpDirectChildren(group: ViewGroup) {
-            for (index in 0 until group.childCount) {
-                val child = group.getChildAt(index)
-                val text = (child as? TextView)?.text?.toString()?.replace("\n", "\\n")
-                loggerD(
-                    msg = "BatteryTemp:   CHILD[$index] class=${child.javaClass.name} " +
-                        "id=${resourceName(child)} text=${text ?: "<none>"} shown=${child.isShown}"
-                )
-            }
-        }
-
-        private fun dumpViewTree(view: View, depth: Int, maxDepth: Int) {
-            if (depth > maxDepth) return
-            val indent = "  ".repeat(depth)
-            val text = (view as? TextView)?.text?.toString()?.replace("\n", "\\n")
-            loggerD(
-                msg = "BatteryTemp: TREE $indent${view.javaClass.name} " +
-                    "id=${resourceName(view)} text=${text ?: "<none>"}"
-            )
-            if (view is ViewGroup) {
-                for (index in 0 until view.childCount) {
-                    dumpViewTree(view.getChildAt(index), depth + 1, maxDepth)
-                }
-            }
-        }
+        private fun dp(context: Context, value: Int): Int =
+            (value * context.resources.displayMetrics.density + 0.5f).toInt()
 
         private fun resourceName(view: View): String = try {
             if (view.id == View.NO_ID) "NO_ID" else view.resources.getResourceEntryName(view.id)
