@@ -57,7 +57,7 @@ class HookEntry : IYukiHookXposedInit {
                         return@use
                     }
 
-                    val targetClass = targetData.getClassInstance(classLoader)
+                    val targetClass = targetData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: DexKit target found: ${targetClass.name}")
 
                     findClass(targetClass.name).hook {
