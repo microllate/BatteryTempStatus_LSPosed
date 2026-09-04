@@ -173,6 +173,7 @@ class HookEntry : IYukiHookXposedInit {
                             null,
                             IntentFilter(Intent.ACTION_BATTERY_CHANGED)
                         )
+
                         val tempTenth = intent?.getIntExtra(
                             BatteryManager.EXTRA_TEMPERATURE,
                             Int.MIN_VALUE
@@ -180,11 +181,32 @@ class HookEntry : IYukiHookXposedInit {
 
                         if (tempTenth != Int.MIN_VALUE) {
                             val celsius = Math.round(tempTenth / 10.0f)
-                            target.text = " ${celsius}℃"
+
+                            // Keep the original implementation's power calculation:
+                            // voltage from ACTION_BATTERY_CHANGED is in mV, while
+                            // BATTERY_PROPERTY_CURRENT_NOW is in microamps.
+                            val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+                            val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                            val current = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+                                ?: Int.MIN_VALUE
+
+                            if (voltage >= 0 && current != Int.MIN_VALUE) {
+                                val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+                                val powerString = if (power < 0) {
+                                    String.format("充电 %.2fW", power)
+                                } else {
+                                    String.format("耗电 %.2fW", power)
+                                }
+                                target.text = String.format(" %s℃ %s", celsius, powerString)
+                            } else {
+                                target.text = " ${celsius}℃"
+                            }
                         }
+
                         handler.postDelayed(this, REFRESH_MS)
                     } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: temperature update failed: ${e.stackTraceToString()}")
+                        loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.stackTraceToString()}")
+                        handler.postDelayed(this, REFRESH_MS)
                     }
                 }
             }
