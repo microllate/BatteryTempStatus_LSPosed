@@ -155,6 +155,14 @@ class HookEntry : IYukiHookXposedInit {
             val batteryIntent = arrayOfNulls<Intent>(1)
             var registered = false
 
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
+                        batteryIntent[0] = intent
+                    }
+                }
+            }
+
             lateinit var update: Runnable
 
             fun stop() {
@@ -167,14 +175,6 @@ class HookEntry : IYukiHookXposedInit {
                     registered = false
                 }
                 batteryIntent[0] = null
-            }
-
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
-                        batteryIntent[0] = intent
-                    }
-                }
             }
 
             fun start() {
