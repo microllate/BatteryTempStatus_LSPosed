@@ -20,6 +20,7 @@ import com.highcapable.yukihookapi.hook.log.loggerD
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.StringMatchType
+import java.lang.ref.WeakReference
 import java.lang.reflect.Field
 import java.util.Locale
 
@@ -92,9 +93,8 @@ class HookEntry : IYukiHookXposedInit {
                                     updateTextColorAndSize(statusBarView, tempView)
                                     leftSideGroup.addView(tempView, 1)
                                     statusBarView.setTag(TAG_KEY, true)
-                                    injectedTextView = tempView
 
-                                    startTemperatureUpdater(statusBarView, tempView)
+                                    startTemperatureUpdater(tempView)
                                 } catch (e: Throwable) {
                                     loggerD(msg = "BatteryTemp: controller injection failed: ${e.stackTraceToString()}")
                                 }
@@ -127,7 +127,7 @@ class HookEntry : IYukiHookXposedInit {
                             }
                             afterHook {
                                 try {
-                                    injectedTextView?.setTextColor(args(0).int())
+                                    injectedTextView?.get()?.setTextColor(args(0).int())
                                 } catch (e: Throwable) {
                                     loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                 }
@@ -146,93 +146,115 @@ class HookEntry : IYukiHookXposedInit {
         private const val REFRESH_MS = 2000L
 
         @Volatile
-        private var injectedTextView: TextView? = null
+        private var injectedTextView: WeakReference<TextView>? = null
 
-        @Volatile
-        private var batteryIntent: Intent? = null
-
-        @Volatile
-        private var batteryReceiverRegistered = false
-
-        private val batteryReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
-                    batteryIntent = intent
-                }
-            }
-        }
-
-        private fun ensureBatteryReceiver(context: Context) {
-            if (batteryReceiverRegistered) return
-
-            synchronized(this) {
-                if (batteryReceiverRegistered) return
-
-                val appContext = context.applicationContext
-                try {
-                    val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                    val stickyIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        appContext.registerReceiver(
-                            batteryReceiver,
-                            filter,
-                            Context.RECEIVER_EXPORTED
-                        )
-                    } else {
-                        appContext.registerReceiver(batteryReceiver, filter)
-                    }
-                    batteryIntent = stickyIntent
-                    batteryReceiverRegistered = true
-                    loggerD(msg = "BatteryTemp: battery receiver registered once")
-                } catch (e: Throwable) {
-                    loggerD(msg = "BatteryTemp: battery receiver registration failed: ${e.message}")
-                }
-            }
-        }
-
-        private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
-            ensureBatteryReceiver(parent.context)
-
+        private fun startTemperatureUpdater(target: TextView) {
             val handler = Handler(Looper.getMainLooper())
-            val update = object : Runnable {
-                override fun run() {
-                    try {
-                        val intent = batteryIntent
-                        if (intent != null) {
-                            val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
-                            val celsius = Math.round(tempTenth / 10.0f)
-                            val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
-                            val batteryManager =
-                                parent.context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                            val current = batteryManager.getIntProperty(2)
-                            val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+            val targetReference = WeakReference(target)
+            val context = target.context.applicationContext
+            val batteryIntent = arrayOfNulls<Intent>(1)
 
-                            val powerString: String = if (power < 0) {
-                                String.format(Locale.getDefault(), " %.2fw", power)
-                            } else {
-                                String.format(Locale.getDefault(), " %.2fw", power)
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
+                        batteryIntent[0] = intent
+                    }
+                }
+            }
+
+            var registered = false
+
+            fun stop() {
+                handler.removeCallbacksAndMessages(null)
+                if (registered) {
+                    try {
+                        context.unregisterReceiver(receiver)
+                    } catch (_: Throwable) {
+                    }
+                    registered = false
+                }
+                batteryIntent[0] = null
+            }
+
+            target.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    if (registered) return
+
+                    try {
+                        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                        val stickyIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            context.registerReceiver(
+                                receiver,
+                                filter,
+                                Context.RECEIVER_EXPORTED
+                            )
+                        } else {
+                            @Suppress("DEPRECATION")
+                            context.registerReceiver(receiver, filter)
+                        }
+                        batteryIntent[0] = stickyIntent
+                        registered = true
+                    } catch (e: Throwable) {
+                        loggerD(msg = "BatteryTemp: battery receiver registration failed: ${e.message}")
+                    }
+
+                    val update = object : Runnable {
+                        override fun run() {
+                            val view = targetReference.get()
+                            if (view == null || !view.isAttachedToWindow) {
+                                stop()
+                                return
                             }
 
-                            target.text = String.format(
-                                Locale.getDefault(),
-                                " %s℃ %s",
-                                celsius,
-                                powerString
-                            )
+                            try {
+                                val intent = batteryIntent[0]
+                                if (intent != null) {
+                                    val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+                                    val celsius = Math.round(tempTenth / 10.0f)
+                                    val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+                                    val batteryManager =
+                                        context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                                    val current = batteryManager.getIntProperty(2)
+                                    val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+
+                                    val powerString = String.format(
+                                        Locale.getDefault(),
+                                        " %.2fw",
+                                        power
+                                    )
+
+                                    view.text = String.format(
+                                        Locale.getDefault(),
+                                        " %s℃ %s",
+                                        celsius,
+                                        powerString
+                                    )
+                                }
+                            } catch (e: Throwable) {
+                                loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
+                            }
+                            handler.postDelayed(this, REFRESH_MS)
                         }
-                    } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
                     }
-                    handler.postDelayed(this, REFRESH_MS)
+                    handler.post(update)
+                }
+
+                override fun onViewDetachedFromWindow(v: View) {
+                    stop()
+                }
+            })
+
+            injectedTextView = targetReference
+
+            if (target.isAttachedToWindow) {
+                target.post {
+                    if (target.isAttachedToWindow) {
+                        target.dispatchWindowFocusChanged(target.hasWindowFocus())
+                    }
                 }
             }
-            handler.post(update)
         }
 
-        /**
-         * Resolve the left status-bar container without depending on a compiled R.id value.
-         * Resource entry names are preferred; the recursive semantic fallback handles OEM changes
-         * where the resource id/name is renamed but the view's role/class remains recognizable.
-         */
         private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
             val context = root.context
             val resourceNames = arrayOf(
@@ -281,8 +303,6 @@ class HookEntry : IYukiHookXposedInit {
                 }
             }
 
-            // Fallback is deliberately restricted to TextView instances. Resource names are
-            // preferred over class names so Clock containers can never be mistaken for the clock.
             var classNameCandidate: TextView? = null
             return findTextView(root) { view ->
                 val resourceName = view.resourceEntryName(context)
