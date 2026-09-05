@@ -217,22 +217,27 @@ class HookEntry : IYukiHookXposedInit {
                             val celsius = Math.round(tempTenth / 10.0f)
                             val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
                             val batteryManager =
-                                context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                            val current = batteryManager.getIntProperty(2)
-                            val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+                                context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
 
-                            val powerString = String.format(
-                                Locale.getDefault(),
-                                " %.2fw",
-                                power
-                            )
+                            if (batteryManager == null) {
+                                loggerD(msg = "BatteryTemp: BatteryManager unavailable")
+                            } else {
+                                val current = batteryManager.getIntProperty(2)
+                                val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
 
-                            view.text = String.format(
-                                Locale.getDefault(),
-                                " %s℃ %s",
-                                celsius,
-                                powerString
-                            )
+                                val powerString = String.format(
+                                    Locale.getDefault(),
+                                    " %.2fw",
+                                    power
+                                )
+
+                                view.text = String.format(
+                                    Locale.getDefault(),
+                                    " %s℃ %s",
+                                    celsius,
+                                    powerString
+                                )
+                            }
                         }
                     } catch (e: Throwable) {
                         loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
