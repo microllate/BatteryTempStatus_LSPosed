@@ -112,13 +112,15 @@ class HookEntry : IYukiHookXposedInit {
                     val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
 
-                    // Hook only NetworkSpeedView instead of every TextView. This removes the
-                    // global TextView hook and all ViewParent traversal from the hot path.
+                    // Restrict the hook to NetworkSpeedView. If setTextColor is inherited,
+                    // superClass() makes YukiHookAPI resolve that inherited method on this class.
+                    // No global TextView hook and no ViewParent traversal are used.
                     findClass(networkSpeedViewClass.name).hook {
                         injectMember {
                             method {
                                 name = "setTextColor"
                                 param(Int::class.javaPrimitiveType!!)
+                                superClass(isOnlySuperClass = false)
                             }
                             afterHook {
                                 try {
