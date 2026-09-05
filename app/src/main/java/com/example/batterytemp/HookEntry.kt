@@ -15,7 +15,6 @@ import android.widget.TextView
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.configs
 import com.highcapable.yukihookapi.hook.factory.encase
-import com.highcapable.yukihookapi.hook.factory.method
 import com.highcapable.yukihookapi.hook.log.loggerD
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import org.luckypray.dexkit.DexKitBridge
@@ -131,12 +130,16 @@ class HookEntry : IYukiHookXposedInit {
                                     }
                                     afterHook {
                                         try {
-                                            val networkView = instanceOrNull as? TextView
-                                            if (networkView != null) {
-                                                val color = networkView.currentTextColor
-                                                injectedTextView?.get()?.setTextColor(color)
-                                                loggerD(msg = "BatteryTemp: synced NetworkSpeedView color = 0x${color.toUInt().toString(16)}")
+                                            val target = injectedTextView?.get()
+                                            if (target == null) {
+                                                loggerD(msg = "BatteryTemp: color sync skipped, injected TextView is gone")
+                                                return@afterHook
                                             }
+                                            // DarkReceiver.onDarkChanged(..., tint, lightColor, darkColor, ...)
+                                            // The tint argument is the color NetworkSpeedView receives for its status-bar text.
+                                            val tint = args(index = 2).cast<Int>()
+                                            target.setTextColor(tint)
+                                            loggerD(msg = "BatteryTemp: synced NetworkSpeedView tint = 0x${tint.toUInt().toString(16)}")
                                         } catch (e: Throwable) {
                                             loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                         }
