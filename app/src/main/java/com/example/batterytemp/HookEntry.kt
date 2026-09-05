@@ -63,8 +63,6 @@ class HookEntry : IYukiHookXposedInit {
                     val controllerClass = controllerData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current hook target = ${controllerClass.name}")
 
-                    // Keep the original behavior: initialize the injected TextView from the clock,
-                    // then let NetworkSpeedView's setTextColor updates override its color.
                     findClass(controllerClass.name).hook {
                         injectMember {
                             method {
@@ -75,37 +73,24 @@ class HookEntry : IYukiHookXposedInit {
                                 try {
                                     val controller = instanceOrNull ?: return@afterHook
                                     val statusBarView = readField(controller, "mView") as? ViewGroup
-                                    if (statusBarView == null) {
-                                        loggerD(msg = "BatteryTemp: PhoneStatusBarViewController.mView is null/not ViewGroup")
-                                        return@afterHook
-                                    }
+                                        ?: return@afterHook
 
                                     if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
 
-                                    // Keep the current source's fixed resource id and insertion index.
                                     val leftSideGroup = statusBarView.findViewById<ViewGroup>(0x7f0a0884)
-                                    if (leftSideGroup == null) {
-                                        loggerD(msg = "BatteryTemp: left side container 0x7f0a0884 not found")
-                                        return@afterHook
-                                    }
+                                        ?: return@afterHook
 
-                                    val context = statusBarView.context
-                                    val tempView = TextView(context).apply {
+                                    val tempView = TextView(statusBarView.context).apply {
                                         setTag(TAG_KEY, true)
                                         setPadding(0, 0, 10, 0)
                                     }
 
-                                    // Original initialization: color and size follow the clock.
+                                    // Original behavior: initialize color and size from the clock first.
                                     updateTextColorAndSize(statusBarView, tempView)
 
-                                    // Original insertion behavior: index 1, without changing the index semantics.
+                                    // Original behavior: insert at index 1.
                                     leftSideGroup.addView(tempView, 1)
                                     statusBarView.setTag(TAG_KEY, true)
-
-                                    loggerD(
-                                        msg = "BatteryTemp: injected using PhoneStatusBarViewController into " +
-                                            "${leftSideGroup.javaClass.name} id=${resourceName(leftSideGroup)}"
-                                    )
 
                                     startTemperatureUpdater(statusBarView, tempView)
                                 } catch (e: Throwable) {
@@ -115,10 +100,10 @@ class HookEntry : IYukiHookXposedInit {
                         }
                     }
 
-                    // Original behavior: hook every TextView.setTextColor(int). If the TextView is
-                    // inside NetworkSpeedView, copy that color to the injected temperature TextView.
+                    // Original behavior: hook TextView.setTextColor globally. Only a TextView
+                    // inside NetworkSpeedView changes the injected TextView's color.
                     val networkSpeedViewClass = try {
-                        findClass("com.android.systemui.statusbar.views.NetworkSpeedView").get()
+                        classLoader.loadClass("com.android.systemui.statusbar.views.NetworkSpeedView")
                     } catch (e: Throwable) {
                         loggerD(msg = "BatteryTemp: NetworkSpeedView class not found: ${e.message}")
                         null
@@ -137,8 +122,7 @@ class HookEntry : IYukiHookXposedInit {
                                         val injected = findInjectedTextView(target)
                                         if (injected == null || target === injected) return@afterHook
                                         if (isInsideNetworkSpeedView(target, networkSpeedViewClass)) {
-                                            val color = args(0).int()
-                                            injected.setTextColor(color)
+                                            injected.setTextColor(args(0).int())
                                         }
                                     } catch (e: Throwable) {
                                         loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
@@ -147,8 +131,6 @@ class HookEntry : IYukiHookXposedInit {
                             }
                         }
                     }
-
-                    loggerD(msg = "BatteryTemp: current SystemUI controller hook initialized")
                 }
             } catch (e: Throwable) {
                 loggerD(msg = "BatteryTemp: SystemUI hook failed: ${e.stackTraceToString()}")
@@ -189,52 +171,35 @@ class HookEntry : IYukiHookXposedInit {
             val update = object : Runnable {
                 override fun run() {
                     try {
-                        if (target != null && parent.context != null) {
-                            val intent = parent.context.registerReceiver(
-                                null,
-                                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                            )
+                        val intent = parent.context.registerReceiver(
+                            null,
+                            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                        )
+                        if (intent != null) {
+                            val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+                            val celsius = Math.round(tempTenth / 10.0f)
+                            val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+                            val batteryManager =
+                                parent.context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                            val current = batteryManager.getIntProperty(2)
+                            val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
 
-                            if (intent != null) {
-                                val tempTenth = intent.getIntExtra(
-                                    BatteryManager.EXTRA_TEMPERATURE,
-                                    0
-                                )
-                                val celsius = Math.round(tempTenth / 10.0f)
-
-                                val voltage = intent.getIntExtra(
-                                    BatteryManager.EXTRA_VOLTAGE,
-                                    -1
-                                )
-
-                                val batteryManager =
-                                    parent.context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-
-                                val current = batteryManager.getIntProperty(2)
-
-                                val power =
-                                    voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
-
-                                val powerString: String = if (power < 0) {
-                                    String.format(Locale.getDefault(), " %.2fw", power)
-                                } else {
-                                    String.format(Locale.getDefault(), " %.2fw", power)
-                                }
-
-                                val tempString = String.format(
-                                    Locale.getDefault(),
-                                    " %s℃ %s",
-                                    celsius,
-                                    powerString
-                                )
-                                target.text = tempString
+                            val powerString: String = if (power < 0) {
+                                String.format(Locale.getDefault(), " %.2fw", power)
+                            } else {
+                                String.format(Locale.getDefault(), " %.2fw", power)
                             }
+
+                            target.text = String.format(
+                                Locale.getDefault(),
+                                " %s℃ %s",
+                                celsius,
+                                powerString
+                            )
                         }
                     } catch (e: Throwable) {
                         loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
                     }
-
-                    // Keep the original updater lifecycle: always schedule the next update.
                     handler.postDelayed(this, REFRESH_MS)
                 }
             }
@@ -245,9 +210,8 @@ class HookEntry : IYukiHookXposedInit {
             val clockView = parent.findViewById<TextView>(0x7f0a024f)
             if (clockView != null) {
                 targetTextView.setTextColor(clockView.currentTextColor)
-                val fontSize =
-                    clockView.textSize /
-                        parent.context.resources.displayMetrics.scaledDensity
+                val fontSize = clockView.textSize /
+                    parent.context.resources.displayMetrics.scaledDensity
                 targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
             } else {
                 targetTextView.setTextColor(0xFFFFFFFF.toInt())
@@ -267,12 +231,6 @@ class HookEntry : IYukiHookXposedInit {
                 }
             }
             return null
-        }
-
-        private fun resourceName(view: View): String = try {
-            if (view.id == View.NO_ID) "NO_ID" else view.resources.getResourceEntryName(view.id)
-        } catch (_: Throwable) {
-            "id=${view.id}"
         }
     }
 }
