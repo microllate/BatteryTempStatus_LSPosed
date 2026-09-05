@@ -18,6 +18,7 @@ import com.highcapable.yukihookapi.hook.log.loggerD
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.StringMatchType
+import java.lang.reflect.Field
 import java.util.Locale
 
 @InjectYukiHookWithXposed
@@ -32,19 +33,19 @@ class HookEntry : IYukiHookXposedInit {
                     loggerD(msg = "BatteryTemp: SystemUI classLoader is null")
                     return@loadApp
                 }
+
                 val apkPath = appInfo.sourceDir
-                loggerD(msg = "BatteryTemp: DexKit scanning SystemUI: $apkPath")
+                loggerD(msg = "BatteryTemp: DexKit scanning current SystemUI: $apkPath")
                 System.loadLibrary("dexkit")
 
                 DexKitBridge.create(apkPath).use { bridge ->
-                    loggerD(msg = "BatteryTemp: DexKit initialized, dexCount=${bridge.getDexNum()}")
-                    val targetData = bridge.findClass {
+                    val controllerData = bridge.findClass {
                         searchPackages("com.android.systemui")
                         matcher {
-                            className("MiuiPhoneStatusBarView", StringMatchType.Contains)
+                            className("PhoneStatusBarViewController", StringMatchType.Contains)
                             methods {
                                 add {
-                                    name("onFinishInflate")
+                                    name("onViewAttached")
                                     returnType("void")
                                     paramCount(0)
                                 }
@@ -53,53 +54,63 @@ class HookEntry : IYukiHookXposedInit {
                         findFirst = true
                     }.firstOrNull()
 
-                    if (targetData == null) {
-                        loggerD(msg = "BatteryTemp: DexKit target class not found")
+                    if (controllerData == null) {
+                        loggerD(msg = "BatteryTemp: PhoneStatusBarViewController not found")
                         return@use
                     }
 
-                    val targetClass = targetData.getInstance(classLoader)
-                    loggerD(msg = "BatteryTemp: DexKit target found: ${targetClass.name}")
+                    val controllerClass = controllerData.getInstance(classLoader)
+                    loggerD(msg = "BatteryTemp: current hook target = ${controllerClass.name}")
 
-                    findClass(targetClass.name).hook {
+                    findClass(controllerClass.name).hook {
                         injectMember {
-                            method { name = "onFinishInflate" }
+                            method {
+                                name = "onViewAttached"
+                            }
                             afterHook {
                                 try {
-                                    val statusBarView = instance as? ViewGroup ?: return@afterHook
+                                    val controller = instance ?: return@afterHook
+                                    val statusBarView = readField(controller, "mView") as? ViewGroup
+                                    if (statusBarView == null) {
+                                        loggerD(msg = "BatteryTemp: PhoneStatusBarViewController.mView is null/not ViewGroup")
+                                        return@afterHook
+                                    }
+
                                     if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
 
                                     val leftSideGroup = findLeftSideGroup(statusBarView)
                                     if (leftSideGroup == null) {
-                                        loggerD(msg = "BatteryTemp: left status bar container not found")
+                                        loggerD(msg = "BatteryTemp: current left status bar container not found")
                                         return@afterHook
                                     }
 
                                     val context = statusBarView.context
-                                    val tempView = TextView(context)
-                                    tempView.setTag(TAG_KEY, true)
-                                    tempView.setSingleLine(true)
-                                    applyBatteryStyle(statusBarView, tempView)
-                                    tempView.setPadding(0, 0, dp(context, 10), 0)
+                                    val tempView = TextView(context).apply {
+                                        setTag(TAG_KEY, true)
+                                        isSingleLine = true
+                                        setPadding(0, 0, dp(context, 10), 0)
+                                    }
 
-                                    val insertIndex = minOf(3, leftSideGroup.childCount)
-                                    leftSideGroup.addView(tempView, insertIndex)
+                                    applyBatteryStyle(statusBarView, tempView)
+
+                                    // The current source inserts immediately after the first left-side item.
+                                    leftSideGroup.addView(tempView, minOf(1, leftSideGroup.childCount))
                                     statusBarView.setTag(TAG_KEY, true)
 
                                     loggerD(
-                                        msg = "BatteryTemp: injected into " +
-                                            "${leftSideGroup.javaClass.name} id=${resourceName(leftSideGroup)} " +
-                                            "index=$insertIndex"
+                                        msg = "BatteryTemp: injected using PhoneStatusBarViewController into " +
+                                            "${leftSideGroup.javaClass.name} id=${resourceName(leftSideGroup)}"
                                     )
 
                                     startTemperatureUpdater(statusBarView, tempView)
                                 } catch (e: Throwable) {
-                                    loggerD(msg = "BatteryTemp: injection failed: ${e.stackTraceToString()}")
+                                    loggerD(msg = "BatteryTemp: controller injection failed: ${e.stackTraceToString()}")
                                 }
                             }
                         }
                     }
-                    loggerD(msg = "BatteryTemp: SystemUI hook initialized successfully")
+
+                    loggerD(msg = "BatteryTemp: current SystemUI controller hook initialized")
                 }
             } catch (e: Throwable) {
                 loggerD(msg = "BatteryTemp: SystemUI hook failed: ${e.stackTraceToString()}")
@@ -113,6 +124,8 @@ class HookEntry : IYukiHookXposedInit {
         private const val STYLE_REFRESH_MS = 200L
 
         private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
+            // Do not use the hard-coded resource id from the current source.
+            // Resolve the same phone_status_bar_left_container by its runtime resource name.
             val targetName = "phone_status_bar_left_container"
             val targetId = try {
                 root.resources.getIdentifier(targetName, "id", root.context.packageName)
@@ -141,8 +154,8 @@ class HookEntry : IYukiHookXposedInit {
         }
 
         /**
-         * Size follows the actual battery percentage TextView, while color follows network speed.
-         * The percentage view is the correct visual reference for the right-side battery text.
+         * Current source behavior: color follows NetworkSpeedView.
+         * User-required behavior: size follows the actual battery percentage text.
          */
         private fun applyBatteryStyle(parent: ViewGroup, target: TextView) {
             val batteryPercent = findBatteryPercentTextView(parent)
@@ -154,33 +167,23 @@ class HookEntry : IYukiHookXposedInit {
                 target.setTextColor(0xFFFFFFFF.toInt())
             }
 
-            if (batteryPercent != null) {
-                val fontSizePx = batteryPercent.textSize
-                if (fontSizePx > 0f) {
-                    target.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSizePx)
-                }
-                loggerD(
-                    msg = "BatteryTemp: synced font from battery percent " +
-                        "${batteryPercent.javaClass.name} id=${resourceName(batteryPercent)} " +
-                        "sizePx=${batteryPercent.textSize}"
-                )
+            if (batteryPercent != null && batteryPercent.textSize > 0f) {
+                target.setTextSize(TypedValue.COMPLEX_UNIT_PX, batteryPercent.textSize)
             } else {
                 target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                loggerD(msg = "BatteryTemp: battery percent TextView not found, using fallback size")
             }
         }
 
         private fun findBatteryPercentTextView(root: ViewGroup): TextView? {
-            // Prefer the actual battery percentage TextView by resource/class semantics.
             val idNames = arrayOf("battery_percent", "battery_percentage", "battery_level")
             for (name in idNames) {
-                val found = findTextViewByResourceName(root, name)
-                if (found != null) return found
+                findTextViewByResourceName(root, name)?.let { return it }
             }
 
-            // On HyperOS the percentage may live inside MiuiBatteryMeterView or a related container.
+            // HyperOS may keep the percentage view inside the battery component.
             if (root.javaClass.name.contains("BatteryMeterView", ignoreCase = true) ||
-                root.javaClass.name.contains("BatteryContainer", ignoreCase = true)) {
+                root.javaClass.name.contains("BatteryContainer", ignoreCase = true)
+            ) {
                 findPercentTextView(root)?.let { return it }
             }
 
@@ -194,7 +197,6 @@ class HookEntry : IYukiHookXposedInit {
         }
 
         private fun findPercentTextView(root: ViewGroup): TextView? {
-            if (root is TextView && looksLikePercentage(root)) return root
             for (index in 0 until root.childCount) {
                 val child = root.getChildAt(index)
                 if (child is TextView && looksLikePercentage(child)) return child
@@ -225,11 +227,9 @@ class HookEntry : IYukiHookXposedInit {
         }
 
         private fun findNetworkSpeedTextView(root: ViewGroup): TextView? {
-            val className = root.javaClass.name
-            if (className.contains("NetworkSpeedView", ignoreCase = true)) {
+            if (root.javaClass.name.contains("NetworkSpeedView", ignoreCase = true)) {
                 findFirstTextView(root)?.let { return it }
             }
-
             for (index in 0 until root.childCount) {
                 val child = root.getChildAt(index)
                 if (child is ViewGroup) {
@@ -240,7 +240,6 @@ class HookEntry : IYukiHookXposedInit {
         }
 
         private fun findFirstTextView(root: ViewGroup): TextView? {
-            if (root is TextView) return root
             for (index in 0 until root.childCount) {
                 val child = root.getChildAt(index)
                 if (child is TextView) return child
@@ -272,14 +271,21 @@ class HookEntry : IYukiHookXposedInit {
                         if (tempTenth != Int.MIN_VALUE) {
                             val celsius = Math.round(tempTenth / 10.0f)
                             val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
-                            val batteryManager = parent.context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-                            val current = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
-                                ?: Int.MIN_VALUE
+                            val batteryManager =
+                                parent.context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                            val current = batteryManager?.getIntProperty(
+                                BatteryManager.BATTERY_PROPERTY_CURRENT_NOW
+                            ) ?: Int.MIN_VALUE
 
                             if (voltage >= 0 && current != Int.MIN_VALUE) {
                                 val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
                                 val powerString = String.format(Locale.getDefault(), "%.2fW", power)
-                                target.text = String.format(Locale.getDefault(), " %s℃ %s", celsius, powerString)
+                                target.text = String.format(
+                                    Locale.getDefault(),
+                                    " %s℃ %s",
+                                    celsius,
+                                    powerString
+                                )
                             } else {
                                 target.text = " ${celsius}℃"
                             }
@@ -311,6 +317,20 @@ class HookEntry : IYukiHookXposedInit {
                     target.setTextColor(color)
                 }
             }
+        }
+
+        private fun readField(instance: Any, fieldName: String): Any? {
+            var type: Class<*>? = instance.javaClass
+            while (type != null) {
+                try {
+                    val field: Field = type.getDeclaredField(fieldName)
+                    field.isAccessible = true
+                    return field.get(instance)
+                } catch (_: NoSuchFieldException) {
+                    type = type.superclass
+                }
+            }
+            return null
         }
 
         private fun dp(context: Context, value: Int): Int =
