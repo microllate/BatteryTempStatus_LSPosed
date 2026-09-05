@@ -86,6 +86,7 @@ class HookEntry : IYukiHookXposedInit {
                                     updateTextColorAndSize(statusBarView, tempView)
                                     leftSideGroup.addView(tempView, 1)
                                     statusBarView.setTag(TAG_KEY, true)
+                                    injectedTextView = tempView
 
                                     startTemperatureUpdater(statusBarView, tempView)
                                 } catch (e: Throwable) {
@@ -111,10 +112,8 @@ class HookEntry : IYukiHookXposedInit {
                     val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
 
-                    // The old implementation hooked every TextView.setTextColor() call and then
-                    // walked up the View tree to discover whether the TextView belonged to
-                    // NetworkSpeedView. Hook NetworkSpeedView itself instead, so unrelated
-                    // TextViews never enter our hook and no ViewParent traversal is needed.
+                    // Hook only NetworkSpeedView instead of every TextView. This removes the
+                    // global TextView hook and all ViewParent traversal from the hot path.
                     findClass(networkSpeedViewClass.name).hook {
                         injectMember {
                             method {
@@ -123,8 +122,7 @@ class HookEntry : IYukiHookXposedInit {
                             }
                             afterHook {
                                 try {
-                                    val injected = findInjectedTextView(statusBarRoots()) ?: return@afterHook
-                                    injected.setTextColor(args(0).int())
+                                    injectedTextView?.setTextColor(args(0).int())
                                 } catch (e: Throwable) {
                                     loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                 }
@@ -142,13 +140,8 @@ class HookEntry : IYukiHookXposedInit {
         private const val TAG_KEY = 0x42545431
         private const val REFRESH_MS = 2000L
 
-        private fun findInjectedTextView(root: ViewGroup?): TextView? {
-            if (root == null) return null
-            val target = root.findViewWithTag<TextView>(TAG_KEY)
-            return target
-        }
-
-        private fun statusBarRoots(): ViewGroup? = null
+        @Volatile
+        private var injectedTextView: TextView? = null
 
         private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
             val handler = Handler(Looper.getMainLooper())
