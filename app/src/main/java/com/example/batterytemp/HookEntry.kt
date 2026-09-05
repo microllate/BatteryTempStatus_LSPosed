@@ -19,6 +19,7 @@ import com.highcapable.yukihookapi.hook.factory.method
 import com.highcapable.yukihookapi.hook.log.loggerD
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import org.luckypray.dexkit.DexKitBridge
+import org.luckypray.dexkit.query.enums.MatchType
 import org.luckypray.dexkit.query.enums.StringMatchType
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
@@ -118,39 +119,61 @@ class HookEntry : IYukiHookXposedInit {
                     val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
 
-                    // setTextColor is inherited from View; YukiHookAPI's member resolver
-                    // may resolve it against View and fail. Hook the concrete override only
-                    // when NetworkSpeedView actually declares one. If it does not, the
-                    // initial color remains synchronized by updateTextColorAndSize().
+                    // Find the actual method declared by NetworkSpeedView that invokes
+                    // TextView.setTextColor(int). This keeps the hook precise and avoids
+                    // globally hooking TextView.setTextColor().
                     try {
-                        val declaredSetTextColor = networkSpeedViewClass.declaredMethods.firstOrNull { method ->
-                            method.name == "setTextColor" &&
-                                method.parameterTypes.size == 1 &&
-                                method.parameterTypes[0] == Int::class.javaPrimitiveType
-                        }
+                        val colorUpdateMethodData = bridge.findMethod {
+                            matcher {
+                                declaredClass(networkSpeedViewClass.name)
+                                invokeMethods {
+                                    add {
+                                        declaredClass("android.widget.TextView")
+                                        name("setTextColor")
+                                        returnType("void")
+                                        paramTypes("int")
+                                    }
+                                    matchType = MatchType.Contains
+                                }
+                            }
+                        }.firstOrNull()
 
-                        if (declaredSetTextColor != null) {
+                        if (colorUpdateMethodData == null) {
+                            loggerD(msg = "BatteryTemp: no NetworkSpeedView method invoking TextView.setTextColor found")
+                        } else {
+                            val colorUpdateMethod = colorUpdateMethodData.getMethodInstance(classLoader)
+                            loggerD(
+                                msg = "BatteryTemp: NetworkSpeedView color update method = " +
+                                    "${colorUpdateMethodData.className}.${colorUpdateMethodData.name}" +
+                                    "(${colorUpdateMethodData.paramTypeNames.joinToString()})"
+                            )
+
                             findClass(networkSpeedViewClass.name).hook {
                                 injectMember {
                                     method {
-                                        name = declaredSetTextColor.name
-                                        param(Int::class.javaPrimitiveType!!)
+                                        name = colorUpdateMethodData.name
+                                        if (colorUpdateMethodData.paramCount == 0) {
+                                            emptyParam()
+                                        } else {
+                                            param(*colorUpdateMethodData.paramTypeNames.toTypedArray())
+                                        }
                                     }
                                     afterHook {
                                         try {
-                                            injectedTextView?.get()?.setTextColor(args(0).int())
+                                            val networkView = instanceOrNull as? TextView
+                                            if (networkView != null) {
+                                                injectedTextView?.get()?.setTextColor(networkView.currentTextColor)
+                                            }
                                         } catch (e: Throwable) {
                                             loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                         }
                                     }
                                 }
                             }
-                            loggerD(msg = "BatteryTemp: NetworkSpeedView declares setTextColor; color sync hook installed")
-                        } else {
-                            loggerD(msg = "BatteryTemp: NetworkSpeedView does not declare setTextColor; using direct color sync fallback")
+                            loggerD(msg = "BatteryTemp: precise NetworkSpeedView color update hook installed")
                         }
                     } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: NetworkSpeedView color hook setup failed: ${e.message}")
+                        loggerD(msg = "BatteryTemp: NetworkSpeedView color hook setup failed: ${e.stackTraceToString()}")
                     }
                 }
             } catch (e: Throwable) {
