@@ -11,130 +11,91 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewParent
 import android.widget.TextView
-import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
-import com.highcapable.yukihookapi.hook.factory.configs
-import com.highcapable.yukihookapi.hook.factory.encase
-import com.highcapable.yukihookapi.hook.factory.method
-import com.highcapable.yukihookapi.hook.log.loggerD
+import com.highcapable.yukihookapi.hook.factory.findClass
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
-import org.luckypray.dexkit.DexKitBridge
-import org.luckypray.dexkit.query.enums.StringMatchType
-import java.lang.reflect.Field
-import java.util.Locale
+import com.highcapable.yukihookapi.hook.xposed.proxy.YukiHookModuleApp
+import com.highcapable.yukihookapi.hook.xposed.bridge.data.YukiHookBridgeData
+import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
+import com.highcapable.yukihookapi.hook.factory.method
+import com.highcapable.yukihookapi.hook.factory.injectMember
+import com.highcapable.yukihookapi.hook.param.HookParam
+import com.highcapable.yukihookapi.hook.type.android.TextView
 
-@InjectYukiHookWithXposed
-class HookEntry : IYukiHookXposedInit {
+class HookEntry : YukiHookModuleApp() {
 
-    override fun onInit() = configs { isDebug = true }
+    override fun onCreate() {
+        super.onCreate()
+        if (packageName != "com.android.systemui") return
 
-    override fun onHook() = encase {
-        loadApp(name = "com.android.systemui") {
-            try {
-                val classLoader = appClassLoader ?: run {
-                    loggerD(msg = "BatteryTemp: SystemUI classLoader is null")
-                    return@loadApp
-                }
+        val classLoader = classLoader
+        try {
+            val controllerClass = classLoader.loadClass(
+                "com.android.systemui.statusbar.phone.PhoneStatusBarViewController"
+            )
 
-                val apkPath = appInfo.sourceDir
-                loggerD(msg = "BatteryTemp: DexKit scanning current SystemUI: $apkPath")
-                System.loadLibrary("dexkit")
-
-                DexKitBridge.create(apkPath).use { bridge ->
-                    val controllerData = bridge.findClass {
-                        searchPackages("com.android.systemui")
-                        matcher {
-                            className("PhoneStatusBarViewController", StringMatchType.Contains)
-                            methods {
-                                add {
-                                    name("onViewAttached")
-                                    returnType("void")
-                                    paramCount(0)
-                                }
+            controllerClass.findClass().hook {
+                injectMember {
+                    method {
+                        name = "onViewAttached"
+                        emptyParam()
+                    }
+                    afterHook {
+                        val handler = Handler(Looper.getMainLooper())
+                        val controllerView = instanceOrNull?.let {
+                            try {
+                                it.javaClass.getDeclaredField("mView").apply { isAccessible = true }.get(it)
+                            } catch (_: Throwable) {
+                                null
                             }
                         }
-                        findFirst = true
-                    }.firstOrNull()
 
-                    if (controllerData == null) {
-                        loggerD(msg = "BatteryTemp: PhoneStatusBarViewController not found")
-                        return@use
-                    }
+                        if (controllerView !is ViewGroup) return@afterHook
 
-                    val controllerClass = controllerData.getInstance(classLoader)
-                    loggerD(msg = "BatteryTemp: current hook target = ${controllerClass.name}")
-
-                    findClass(controllerClass.name).hook {
-                        injectMember {
-                            method {
-                                name = "onViewAttached"
-                                emptyParam()
-                            }
-                            afterHook {
-                                try {
-                                    val controller = instanceOrNull ?: return@afterHook
-                                    val statusBarView = readField(controller, "mView") as? ViewGroup
-                                        ?: return@afterHook
-
-                                    if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
-
-                                    val leftSideGroup = statusBarView.findViewById<ViewGroup>(0x7f0a0884)
-                                        ?: return@afterHook
-
-                                    val tempView = TextView(statusBarView.context).apply {
-                                        setTag(TAG_KEY, true)
-                                        setPadding(0, 0, 10, 0)
-                                    }
-
-                                    // Original behavior: initialize color and size from the clock first.
-                                    updateTextColorAndSize(statusBarView, tempView)
-
-                                    // Original behavior: insert at index 1.
-                                    leftSideGroup.addView(tempView, 1)
-                                    statusBarView.setTag(TAG_KEY, true)
-
-                                    startTemperatureUpdater(statusBarView, tempView)
-                                } catch (e: Throwable) {
-                                    loggerD(msg = "BatteryTemp: controller injection failed: ${e.stackTraceToString()}")
-                                }
-                            }
+                        val statusBarView = controllerView
+                        val systemUiContext = statusBarView.context
+                        val leftSideGroup = try {
+                            statusBarView.findViewById<ViewGroup>(0x7f0a0884)
+                        } catch (_: Throwable) {
+                            null
                         }
-                    }
 
-                    // Original behavior: hook TextView.setTextColor globally. Only a TextView
-                    // inside NetworkSpeedView changes the injected TextView's color.
-                    val networkSpeedViewClass = try {
-                        classLoader.loadClass("com.android.systemui.statusbar.views.NetworkSpeedView")
-                    } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: NetworkSpeedView class not found: ${e.message}")
-                        null
-                    }
+                        if (leftSideGroup == null) return@afterHook
 
-                    if (networkSpeedViewClass != null) {
-                        findClass(TextView::class.java.name).hook {
-                            injectMember {
-                                method {
-                                    name = "setTextColor"
-                                    param(Int::class.javaPrimitiveType!!)
-                                }
-                                afterHook {
-                                    try {
-                                        val target = instanceOrNull as? TextView ?: return@afterHook
-                                        val injected = findInjectedTextView(target)
-                                        if (injected == null || target === injected) return@afterHook
-                                        if (isInsideNetworkSpeedView(target, networkSpeedViewClass)) {
-                                            injected.setTextColor(args(0).int())
-                                        }
-                                    } catch (e: Throwable) {
-                                        loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
-                                    }
-                                }
-                            }
+                        val tempTextView = TextView(systemUiContext).apply {
+                            setTag(TAG_KEY, true)
+                            setPadding(0, 0, 10, 0)
                         }
+
+                        updateTextColorAndSize(statusBarView, tempTextView, systemUiContext)
+                        leftSideGroup.addView(tempTextView, 1)
+                        startTempUpdate(handler, tempTextView, systemUiContext)
                     }
                 }
-            } catch (e: Throwable) {
-                loggerD(msg = "BatteryTemp: SystemUI hook failed: ${e.stackTraceToString()}")
             }
+
+            val networkSpeedViewClass = classLoader.loadClass(
+                "com.android.systemui.statusbar.views.NetworkSpeedView"
+            )
+
+            TextView::class.java.findClass().hook {
+                injectMember {
+                    method {
+                        name = "setTextColor"
+                        param(Int::class.javaPrimitiveType!!)
+                    }
+                    afterHook {
+                        val target = instanceOrNull as? TextView ?: return@afterHook
+                        val injected = findInjectedTextView(target) ?: return@afterHook
+                        if (target === injected) return@afterHook
+
+                        if (isInsideNetworkSpeedView(target, networkSpeedViewClass)) {
+                            injected.setTextColor(args(0).int())
+                        }
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            loggerD(msg = "BatteryTemp: SystemUI hook failed: ${e.stackTraceToString()}")
         }
     }
 
@@ -143,7 +104,7 @@ class HookEntry : IYukiHookXposedInit {
         private const val REFRESH_MS = 2000L
 
         private fun findInjectedTextView(view: View): TextView? {
-            var parent: ViewParent? = view
+            var parent: ViewParent? = view.parent
             while (parent != null) {
                 if (parent is ViewGroup) {
                     for (index in 0 until parent.childCount) {
@@ -151,7 +112,7 @@ class HookEntry : IYukiHookXposedInit {
                         if (child is TextView && child.getTag(TAG_KEY) == true) return child
                     }
                 }
-                if (parent is View) parent = parent.parent else break
+                parent = if (parent is View) parent.parent else null
             }
             return null
         }
@@ -160,77 +121,60 @@ class HookEntry : IYukiHookXposedInit {
             var parent: ViewParent? = view.parent
             while (parent != null) {
                 if (networkSpeedViewClass.isInstance(parent)) return true
-                if (parent !is View) break
-                parent = parent.parent
+                parent = if (parent is View) parent.parent else null
             }
             return false
         }
 
-        private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
-            val handler = Handler(Looper.getMainLooper())
-            val update = object : Runnable {
+        private fun startTempUpdate(handler: Handler, tempTextView: TextView, context: Context) {
+            handler.post(object : Runnable {
                 override fun run() {
-                    try {
-                        val intent = parent.context.registerReceiver(
-                            null,
-                            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                        )
-                        if (intent != null) {
-                            val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
-                            val celsius = Math.round(tempTenth / 10.0f)
-                            val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
-                            val batteryManager =
-                                parent.context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                            val current = batteryManager.getIntProperty(2)
-                            val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+                    val intent = context.registerReceiver(
+                        null,
+                        IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                    )
+                    if (intent != null) {
+                        val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+                        val celsius = Math.round(tempTenth / 10.0f)
+                        val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
 
-                            val powerString: String = if (power < 0) {
-                                String.format(Locale.getDefault(), " %.2fw", power)
-                            } else {
-                                String.format(Locale.getDefault(), " %.2fw", power)
-                            }
+                        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                        val current = batteryManager.javaClass
+                            .getMethod("getIntProperty", Int::class.javaPrimitiveType)
+                            .invoke(batteryManager, 2) as Int
 
-                            target.text = String.format(
-                                Locale.getDefault(),
-                                " %s℃ %s",
-                                celsius,
-                                powerString
-                            )
+                        val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+                        val powerString = if (power < 0) {
+                            String.format(" %.2fw", power)
+                        } else {
+                            String.format(" %.2fw", power)
                         }
-                    } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
+                        tempTextView.text = String.format(" %s℃ %s", celsius, powerString)
                     }
                     handler.postDelayed(this, REFRESH_MS)
                 }
-            }
-            handler.post(update)
+            })
         }
 
-        private fun updateTextColorAndSize(parent: ViewGroup, targetTextView: TextView) {
-            val clockView = parent.findViewById<TextView>(0x7f0a024f)
+        private fun updateTextColorAndSize(
+            parent: ViewGroup,
+            targetTextView: TextView,
+            context: Context
+        ) {
+            val clockView = try {
+                parent.findViewById<TextView>(0x7f0a024f)
+            } catch (_: Throwable) {
+                null
+            }
+
             if (clockView != null) {
                 targetTextView.setTextColor(clockView.currentTextColor)
-                val fontSize = clockView.textSize /
-                    parent.context.resources.displayMetrics.scaledDensity
-                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                val fontsize = clockView.textSize / context.resources.displayMetrics.scaledDensity
+                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontsize)
             } else {
                 targetTextView.setTextColor(0xFFFFFFFF.toInt())
                 targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             }
-        }
-
-        private fun readField(instance: Any, fieldName: String): Any? {
-            var type: Class<*>? = instance.javaClass
-            while (type != null) {
-                try {
-                    val field: Field = type.getDeclaredField(fieldName)
-                    field.isAccessible = true
-                    return field.get(instance)
-                } catch (_: NoSuchFieldException) {
-                    type = type.superclass
-                }
-            }
-            return null
         }
     }
 }
