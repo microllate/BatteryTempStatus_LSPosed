@@ -1,4 +1,4 @@
-package com.example.batterytemp.ui;
+package com.android.batterytemp.ui;
 
 import android.app.Activity;
 import android.os.Bundle;
