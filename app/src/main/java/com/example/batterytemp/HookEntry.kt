@@ -130,14 +130,8 @@ class HookEntry : IYukiHookXposedInit {
                                     }
                                     afterHook {
                                         try {
-                                            val target = injectedTextView?.get()
-                                            if (target == null) {
-                                                loggerD(msg = "BatteryTemp: color sync skipped, injected TextView is gone")
-                                                return@afterHook
-                                            }
-                                            // DarkReceiver.onDarkChanged(..., tint, lightColor, darkColor, ...)
-                                            // The tint argument is the color NetworkSpeedView receives for its status-bar text.
-                                            val tint = args(index = 2).cast<Int>()
+                                            val target = injectedTextView?.get() ?: return@afterHook
+                                            val tint = args(index = 2).cast<Int>() ?: return@afterHook
                                             target.setTextColor(tint)
                                             loggerD(msg = "BatteryTemp: synced NetworkSpeedView tint = 0x${tint.toUInt().toString(16)}")
                                         } catch (e: Throwable) {
