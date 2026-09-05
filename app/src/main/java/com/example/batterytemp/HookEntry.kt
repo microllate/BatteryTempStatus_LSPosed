@@ -118,21 +118,39 @@ class HookEntry : IYukiHookXposedInit {
                     val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
 
-                    findClass(networkSpeedViewClass.name).hook {
-                        injectMember {
-                            method {
-                                name = "setTextColor"
-                                param(Int::class.javaPrimitiveType!!)
-                                superClass(isOnlySuperClass = false)
-                            }
-                            afterHook {
-                                try {
-                                    injectedTextView?.get()?.setTextColor(args(0).int())
-                                } catch (e: Throwable) {
-                                    loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
+                    // setTextColor is inherited from View; YukiHookAPI's member resolver
+                    // may resolve it against View and fail. Hook the concrete override only
+                    // when NetworkSpeedView actually declares one. If it does not, the
+                    // initial color remains synchronized by updateTextColorAndSize().
+                    try {
+                        val declaredSetTextColor = networkSpeedViewClass.declaredMethods.firstOrNull { method ->
+                            method.name == "setTextColor" &&
+                                method.parameterTypes.size == 1 &&
+                                method.parameterTypes[0] == Int::class.javaPrimitiveType
+                        }
+
+                        if (declaredSetTextColor != null) {
+                            findClass(networkSpeedViewClass.name).hook {
+                                injectMember {
+                                    method {
+                                        name = declaredSetTextColor.name
+                                        param(Int::class.javaPrimitiveType!!)
+                                    }
+                                    afterHook {
+                                        try {
+                                            injectedTextView?.get()?.setTextColor(args(0).int())
+                                        } catch (e: Throwable) {
+                                            loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
+                                        }
+                                    }
                                 }
                             }
+                            loggerD(msg = "BatteryTemp: NetworkSpeedView declares setTextColor; color sync hook installed")
+                        } else {
+                            loggerD(msg = "BatteryTemp: NetworkSpeedView does not declare setTextColor; using direct color sync fallback")
                         }
+                    } catch (e: Throwable) {
+                        loggerD(msg = "BatteryTemp: NetworkSpeedView color hook setup failed: ${e.message}")
                     }
                 }
             } catch (e: Throwable) {
@@ -218,25 +236,11 @@ class HookEntry : IYukiHookXposedInit {
                             val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
                             val batteryManager =
                                 context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-
-                            if (batteryManager == null) {
-                                loggerD(msg = "BatteryTemp: BatteryManager unavailable")
-                            } else {
+                            if (batteryManager != null) {
                                 val current = batteryManager.getIntProperty(2)
                                 val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
-
-                                val powerString = String.format(
-                                    Locale.getDefault(),
-                                    " %.2fw",
-                                    power
-                                )
-
-                                view.text = String.format(
-                                    Locale.getDefault(),
-                                    " %s℃ %s",
-                                    celsius,
-                                    powerString
-                                )
+                                val powerString = String.format(Locale.getDefault(), " %.2fw", power)
+                                view.text = String.format(Locale.getDefault(), " %s℃ %s", celsius, powerString)
                             }
                         }
                     } catch (e: Throwable) {
@@ -247,19 +251,22 @@ class HookEntry : IYukiHookXposedInit {
             }
 
             target.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(v: View) {
-                    start()
-                }
-
-                override fun onViewDetachedFromWindow(v: View) {
-                    stop()
-                }
+                override fun onViewAttachedToWindow(v: View) { start() }
+                override fun onViewDetachedFromWindow(v: View) { stop() }
             })
 
             injectedTextView = targetReference
 
             if (target.isAttachedToWindow) {
                 start()
+            }
+        }
+
+        private fun updateTextColorAndSize(root: ViewGroup, target: TextView) {
+            val clock = findClockView(root)
+            if (clock != null) {
+                target.setTextColor(clock.currentTextColor)
+                target.setTextSize(TypedValue.COMPLEX_UNIT_PX, clock.textSize)
             }
         }
 
@@ -270,7 +277,6 @@ class HookEntry : IYukiHookXposedInit {
                 "status_bar_left_container",
                 "status_bar_left"
             )
-
             for (name in resourceNames) {
                 val id = context.resources.getIdentifier(name, "id", "com.android.systemui")
                 if (id != 0) {
@@ -278,7 +284,6 @@ class HookEntry : IYukiHookXposedInit {
                     if (view is ViewGroup) return view
                 }
             }
-
             return findViewGroup(root) { view ->
                 val role = view.semanticName(context)
                 role.contains("left") &&
@@ -286,23 +291,9 @@ class HookEntry : IYukiHookXposedInit {
             }
         }
 
-        private fun updateTextColorAndSize(parent: ViewGroup, targetTextView: TextView) {
-            val clockView = findClockView(parent)
-            if (clockView != null) {
-                targetTextView.setTextColor(clockView.currentTextColor)
-                val fontSize = clockView.textSize /
-                    parent.context.resources.displayMetrics.scaledDensity
-                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
-            } else {
-                targetTextView.setTextColor(0xFFFFFFFF.toInt())
-                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            }
-        }
-
         private fun findClockView(root: ViewGroup): TextView? {
             val context = root.context
             val clockIds = arrayOf("clock", "status_bar_clock")
-
             for (name in clockIds) {
                 val id = context.resources.getIdentifier(name, "id", "com.android.systemui")
                 if (id != 0) {
@@ -327,10 +318,10 @@ class HookEntry : IYukiHookXposedInit {
             } ?: classNameCandidate
         }
 
-        private fun findViewGroup(root: ViewGroup, predicate: (ViewGroup) -> Boolean): ViewGroup? {
+        private fun findViewGroup(root: ViewGroup, predicate: (View) -> Boolean): ViewGroup? {
             if (predicate(root)) return root
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
+            for (i in 0 until root.childCount) {
+                val child = root.getChildAt(i)
                 if (child is ViewGroup) {
                     val result = findViewGroup(child, predicate)
                     if (result != null) return result
@@ -340,13 +331,12 @@ class HookEntry : IYukiHookXposedInit {
         }
 
         private fun findTextView(root: ViewGroup, predicate: (TextView) -> Boolean): TextView? {
-            for (index in 0 until root.childCount) {
-                when (val child = root.getChildAt(index)) {
-                    is TextView -> if (predicate(child)) return child
-                    is ViewGroup -> {
-                        val result = findTextView(child, predicate)
-                        if (result != null) return result
-                    }
+            for (i in 0 until root.childCount) {
+                val child = root.getChildAt(i)
+                if (child is TextView && predicate(child)) return child
+                if (child is ViewGroup) {
+                    val result = findTextView(child, predicate)
+                    if (result != null) return result
                 }
             }
             return null
@@ -354,29 +344,29 @@ class HookEntry : IYukiHookXposedInit {
 
         private fun View.resourceEntryName(context: Context): String {
             return try {
-                if (id != View.NO_ID) context.resources.getResourceEntryName(id) else ""
+                if (id == View.NO_ID) return ""
+                context.resources.getResourceEntryName(id)
             } catch (_: Throwable) {
                 ""
             }
         }
 
         private fun View.semanticName(context: Context): String {
-            return listOf(
-                resourceEntryName(context),
-                javaClass.simpleName,
-                contentDescription?.toString().orEmpty()
-            ).joinToString("_").lowercase(Locale.ROOT)
+            val resourceName = resourceEntryName(context)
+            return if (resourceName.isNotEmpty()) resourceName else javaClass.simpleName
         }
 
-        private fun readField(instance: Any, fieldName: String): Any? {
+        private fun readField(instance: Any, name: String): Any? {
             var type: Class<*>? = instance.javaClass
             while (type != null) {
                 try {
-                    val field: Field = type.getDeclaredField(fieldName)
+                    val field: Field = type.getDeclaredField(name)
                     field.isAccessible = true
                     return field.get(instance)
                 } catch (_: NoSuchFieldException) {
                     type = type.superclass
+                } catch (_: Throwable) {
+                    return null
                 }
             }
             return null
