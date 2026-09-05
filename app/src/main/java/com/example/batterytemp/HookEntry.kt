@@ -26,7 +26,7 @@ import java.util.Locale
 
 @InjectYukiHookWithXposed
 class HookEntry : IYukiHookXposedInit {
-    override fun onInit() = configs { isDebug = true }
+    override fun onInit() = configs { isDebug = false }
 
     override fun onHook() = encase {
         loadApp(name = "com.android.systemui") {
@@ -132,8 +132,9 @@ class HookEntry : IYukiHookXposedInit {
                                         try {
                                             val target = injectedTextView?.get() ?: return@afterHook
                                             val tint = args(index = 2).cast<Int>() ?: return@afterHook
-                                            target.setTextColor(tint)
-                                            loggerD(msg = "BatteryTemp: synced NetworkSpeedView tint = 0x${tint.toUInt().toString(16)}")
+                                            if (target.currentTextColor != tint) {
+                                                target.setTextColor(tint)
+                                            }
                                         } catch (e: Throwable) {
                                             loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                         }
