@@ -7,9 +7,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
-import android.view.View
 import android.view.ViewGroup
-import android.view.ViewParent
 import android.widget.TextView
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.configs
@@ -97,31 +95,38 @@ class HookEntry : IYukiHookXposedInit {
                         }
                     }
 
-                    val networkSpeedViewClass = try {
-                        classLoader.loadClass("com.android.systemui.statusbar.views.NetworkSpeedView")
-                    } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: NetworkSpeedView class not found: ${e.message}")
-                        null
+                    val networkSpeedViewData = bridge.findClass {
+                        searchPackages("com.android.systemui")
+                        matcher {
+                            className("NetworkSpeedView", StringMatchType.Contains)
+                        }
+                        findFirst = true
+                    }.firstOrNull()
+
+                    if (networkSpeedViewData == null) {
+                        loggerD(msg = "BatteryTemp: NetworkSpeedView not found")
+                        return@use
                     }
 
-                    if (networkSpeedViewClass != null) {
-                        findClass(TextView::class.java.name).hook {
-                            injectMember {
-                                method {
-                                    name = "setTextColor"
-                                    param(Int::class.javaPrimitiveType!!)
-                                }
-                                afterHook {
-                                    try {
-                                        val target = instanceOrNull as? TextView ?: return@afterHook
-                                        val injected = findInjectedTextView(target)
-                                        if (injected == null || target === injected) return@afterHook
-                                        if (isInsideNetworkSpeedView(target, networkSpeedViewClass)) {
-                                            injected.setTextColor(args(0).int())
-                                        }
-                                    } catch (e: Throwable) {
-                                        loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
-                                    }
+                    val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
+                    loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
+
+                    // The old implementation hooked every TextView.setTextColor() call and then
+                    // walked up the View tree to discover whether the TextView belonged to
+                    // NetworkSpeedView. Hook NetworkSpeedView itself instead, so unrelated
+                    // TextViews never enter our hook and no ViewParent traversal is needed.
+                    findClass(networkSpeedViewClass.name).hook {
+                        injectMember {
+                            method {
+                                name = "setTextColor"
+                                param(Int::class.javaPrimitiveType!!)
+                            }
+                            afterHook {
+                                try {
+                                    val injected = findInjectedTextView(statusBarRoots()) ?: return@afterHook
+                                    injected.setTextColor(args(0).int())
+                                } catch (e: Throwable) {
+                                    loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
                                 }
                             }
                         }
@@ -137,29 +142,13 @@ class HookEntry : IYukiHookXposedInit {
         private const val TAG_KEY = 0x42545431
         private const val REFRESH_MS = 2000L
 
-        private fun findInjectedTextView(view: View): TextView? {
-            var parent: ViewParent? = view.parent
-            while (parent != null) {
-                if (parent is ViewGroup) {
-                    for (index in 0 until parent.childCount) {
-                        val child = parent.getChildAt(index)
-                        if (child is TextView && child.getTag(TAG_KEY) == true) return child
-                    }
-                }
-                if (parent is View) parent = parent.parent else break
-            }
-            return null
+        private fun findInjectedTextView(root: ViewGroup?): TextView? {
+            if (root == null) return null
+            val target = root.findViewWithTag<TextView>(TAG_KEY)
+            return target
         }
 
-        private fun isInsideNetworkSpeedView(view: View, networkSpeedViewClass: Class<*>): Boolean {
-            var parent: ViewParent? = view.parent
-            while (parent != null) {
-                if (networkSpeedViewClass.isInstance(parent)) return true
-                if (parent !is View) break
-                parent = parent.parent
-            }
-            return false
-        }
+        private fun statusBarRoots(): ViewGroup? = null
 
         private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
             val handler = Handler(Looper.getMainLooper())
