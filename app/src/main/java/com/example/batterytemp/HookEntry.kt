@@ -7,6 +7,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
+import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
@@ -75,8 +76,11 @@ class HookEntry : IYukiHookXposedInit {
 
                                     if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
 
-                                    val leftSideGroup = statusBarView.findViewById<ViewGroup>(0x7f0a0884)
-                                        ?: return@afterHook
+                                    val leftSideGroup = findLeftSideGroup(statusBarView)
+                                    if (leftSideGroup == null) {
+                                        loggerD(msg = "BatteryTemp: left status bar container not found")
+                                        return@afterHook
+                                    }
 
                                     val tempView = TextView(statusBarView.context).apply {
                                         setTag(TAG_KEY, true)
@@ -112,9 +116,6 @@ class HookEntry : IYukiHookXposedInit {
                     val networkSpeedViewClass = networkSpeedViewData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current NetworkSpeedView = ${networkSpeedViewClass.name}")
 
-                    // Restrict the hook to NetworkSpeedView. If setTextColor is inherited,
-                    // superClass() makes YukiHookAPI resolve that inherited method on this class.
-                    // No global TextView hook and no ViewParent traversal are used.
                     findClass(networkSpeedViewClass.name).hook {
                         injectMember {
                             method {
@@ -185,8 +186,36 @@ class HookEntry : IYukiHookXposedInit {
             handler.post(update)
         }
 
+        /**
+         * Resolve the left status-bar container without depending on a compiled R.id value.
+         * Resource entry names are preferred; the recursive semantic fallback handles OEM changes
+         * where the resource id/name is renamed but the view's role/class remains recognizable.
+         */
+        private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
+            val context = root.context
+            val resourceNames = arrayOf(
+                "phone_status_bar_left_container",
+                "status_bar_left_container",
+                "status_bar_left"
+            )
+
+            for (name in resourceNames) {
+                val id = context.resources.getIdentifier(name, "id", "com.android.systemui")
+                if (id != 0) {
+                    val view = root.findViewById<View>(id)
+                    if (view is ViewGroup) return view
+                }
+            }
+
+            return findViewGroup(root) { view ->
+                val role = view.semanticName(context)
+                role.contains("left") &&
+                    (role.contains("container") || role.contains("statusbar") || role.contains("status_bar"))
+            }
+        }
+
         private fun updateTextColorAndSize(parent: ViewGroup, targetTextView: TextView) {
-            val clockView = parent.findViewById<TextView>(0x7f0a024f)
+            val clockView = findClockView(parent)
             if (clockView != null) {
                 targetTextView.setTextColor(clockView.currentTextColor)
                 val fontSize = clockView.textSize /
@@ -196,6 +225,64 @@ class HookEntry : IYukiHookXposedInit {
                 targetTextView.setTextColor(0xFFFFFFFF.toInt())
                 targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             }
+        }
+
+        private fun findClockView(root: ViewGroup): TextView? {
+            val context = root.context
+            val clockIds = arrayOf("clock", "status_bar_clock")
+
+            for (name in clockIds) {
+                val id = context.resources.getIdentifier(name, "id", "com.android.systemui")
+                if (id != 0) {
+                    val view = root.findViewById<View>(id)
+                    if (view is TextView) return view
+                }
+            }
+
+            return findTextView(root) { view ->
+                val role = view.semanticName(context)
+                role == "clock" ||
+                    role.endsWith("_clock") ||
+                    role.contains("clock")
+            }
+        }
+
+        private fun findViewGroup(root: ViewGroup, predicate: (ViewGroup) -> Boolean): ViewGroup? {
+            if (predicate(root)) return root
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is ViewGroup) {
+                    val result = findViewGroup(child, predicate)
+                    if (result != null) return result
+                }
+            }
+            return null
+        }
+
+        private fun findTextView(root: ViewGroup, predicate: (TextView) -> Boolean): TextView? {
+            for (index in 0 until root.childCount) {
+                when (val child = root.getChildAt(index)) {
+                    is TextView -> if (predicate(child)) return child
+                    is ViewGroup -> {
+                        val result = findTextView(child, predicate)
+                        if (result != null) return result
+                    }
+                }
+            }
+            return null
+        }
+
+        private fun View.semanticName(context: Context): String {
+            val resourceName = try {
+                if (id != View.NO_ID) context.resources.getResourceEntryName(id) else ""
+            } catch (_: Throwable) {
+                ""
+            }
+            return listOf(
+                resourceName,
+                javaClass.simpleName,
+                contentDescription?.toString().orEmpty()
+            ).joinToString("_").lowercase(Locale.ROOT)
         }
 
         private fun readField(instance: Any, fieldName: String): Any? {
