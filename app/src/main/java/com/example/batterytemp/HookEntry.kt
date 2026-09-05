@@ -1,9 +1,11 @@
 package com.example.batterytemp
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
@@ -146,15 +148,55 @@ class HookEntry : IYukiHookXposedInit {
         @Volatile
         private var injectedTextView: TextView? = null
 
+        @Volatile
+        private var batteryIntent: Intent? = null
+
+        @Volatile
+        private var batteryReceiverRegistered = false
+
+        private val batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
+                    batteryIntent = intent
+                }
+            }
+        }
+
+        private fun ensureBatteryReceiver(context: Context) {
+            if (batteryReceiverRegistered) return
+
+            synchronized(this) {
+                if (batteryReceiverRegistered) return
+
+                val appContext = context.applicationContext
+                try {
+                    val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                    val stickyIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        appContext.registerReceiver(
+                            batteryReceiver,
+                            filter,
+                            Context.RECEIVER_EXPORTED
+                        )
+                    } else {
+                        appContext.registerReceiver(batteryReceiver, filter)
+                    }
+                    batteryIntent = stickyIntent
+                    batteryReceiverRegistered = true
+                    loggerD(msg = "BatteryTemp: battery receiver registered once")
+                } catch (e: Throwable) {
+                    loggerD(msg = "BatteryTemp: battery receiver registration failed: ${e.message}")
+                }
+            }
+        }
+
         private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
+            ensureBatteryReceiver(parent.context)
+
             val handler = Handler(Looper.getMainLooper())
             val update = object : Runnable {
                 override fun run() {
                     try {
-                        val intent = parent.context.registerReceiver(
-                            null,
-                            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                        )
+                        val intent = batteryIntent
                         if (intent != null) {
                             val tempTenth = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
                             val celsius = Math.round(tempTenth / 10.0f)
@@ -239,12 +281,22 @@ class HookEntry : IYukiHookXposedInit {
                 }
             }
 
+            // Fallback is deliberately restricted to TextView instances. Resource names are
+            // preferred over class names so Clock containers can never be mistaken for the clock.
+            var classNameCandidate: TextView? = null
             return findTextView(root) { view ->
-                val role = view.semanticName(context)
-                role == "clock" ||
-                    role.endsWith("_clock") ||
-                    role.contains("clock")
-            }
+                val resourceName = view.resourceEntryName(context)
+                if (resourceName == "clock" || resourceName == "status_bar_clock") return@findTextView true
+                if (resourceName.endsWith("_clock") || resourceName.endsWith("clock")) return@findTextView true
+
+                if (classNameCandidate == null) {
+                    val simpleName = view.javaClass.simpleName
+                    if (simpleName == "Clock" || simpleName.endsWith("Clock")) {
+                        classNameCandidate = view
+                    }
+                }
+                false
+            } ?: classNameCandidate
         }
 
         private fun findViewGroup(root: ViewGroup, predicate: (ViewGroup) -> Boolean): ViewGroup? {
@@ -272,14 +324,17 @@ class HookEntry : IYukiHookXposedInit {
             return null
         }
 
-        private fun View.semanticName(context: Context): String {
-            val resourceName = try {
+        private fun View.resourceEntryName(context: Context): String {
+            return try {
                 if (id != View.NO_ID) context.resources.getResourceEntryName(id) else ""
             } catch (_: Throwable) {
                 ""
             }
+        }
+
+        private fun View.semanticName(context: Context): String {
             return listOf(
-                resourceName,
+                resourceEntryName(context),
                 javaClass.simpleName,
                 contentDescription?.toString().orEmpty()
             ).joinToString("_").lowercase(Locale.ROOT)
