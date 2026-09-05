@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewParent
 import android.widget.TextView
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
 import com.highcapable.yukihookapi.hook.factory.configs
@@ -62,14 +63,17 @@ class HookEntry : IYukiHookXposedInit {
                     val controllerClass = controllerData.getInstance(classLoader)
                     loggerD(msg = "BatteryTemp: current hook target = ${controllerClass.name}")
 
+                    // Keep the original behavior: initialize the injected TextView from the clock,
+                    // then let NetworkSpeedView's setTextColor updates override its color.
                     findClass(controllerClass.name).hook {
                         injectMember {
                             method {
                                 name = "onViewAttached"
+                                emptyParam()
                             }
                             afterHook {
                                 try {
-                                    val controller = instance ?: return@afterHook
+                                    val controller = instanceOrNull ?: return@afterHook
                                     val statusBarView = readField(controller, "mView") as? ViewGroup
                                     if (statusBarView == null) {
                                         loggerD(msg = "BatteryTemp: PhoneStatusBarViewController.mView is null/not ViewGroup")
@@ -78,23 +82,24 @@ class HookEntry : IYukiHookXposedInit {
 
                                     if (statusBarView.getTag(TAG_KEY) != null) return@afterHook
 
-                                    val leftSideGroup = findLeftSideGroup(statusBarView)
+                                    // Keep the current source's fixed resource id and insertion index.
+                                    val leftSideGroup = statusBarView.findViewById<ViewGroup>(0x7f0a0884)
                                     if (leftSideGroup == null) {
-                                        loggerD(msg = "BatteryTemp: current left status bar container not found")
+                                        loggerD(msg = "BatteryTemp: left side container 0x7f0a0884 not found")
                                         return@afterHook
                                     }
 
                                     val context = statusBarView.context
                                     val tempView = TextView(context).apply {
                                         setTag(TAG_KEY, true)
-                                        isSingleLine = true
-                                        setPadding(0, 0, dp(context, 10), 0)
+                                        setPadding(0, 0, 10, 0)
                                     }
 
-                                    applyBatteryStyle(statusBarView, tempView)
+                                    // Original initialization: color and size follow the clock.
+                                    updateTextColorAndSize(statusBarView, tempView)
 
-                                    // The current source inserts immediately after the first left-side item.
-                                    leftSideGroup.addView(tempView, minOf(1, leftSideGroup.childCount))
+                                    // Original insertion behavior: index 1, without changing the index semantics.
+                                    leftSideGroup.addView(tempView, 1)
                                     statusBarView.setTag(TAG_KEY, true)
 
                                     loggerD(
@@ -105,6 +110,39 @@ class HookEntry : IYukiHookXposedInit {
                                     startTemperatureUpdater(statusBarView, tempView)
                                 } catch (e: Throwable) {
                                     loggerD(msg = "BatteryTemp: controller injection failed: ${e.stackTraceToString()}")
+                                }
+                            }
+                        }
+                    }
+
+                    // Original behavior: hook every TextView.setTextColor(int). If the TextView is
+                    // inside NetworkSpeedView, copy that color to the injected temperature TextView.
+                    val networkSpeedViewClass = try {
+                        findClass("com.android.systemui.statusbar.views.NetworkSpeedView").get()
+                    } catch (e: Throwable) {
+                        loggerD(msg = "BatteryTemp: NetworkSpeedView class not found: ${e.message}")
+                        null
+                    }
+
+                    if (networkSpeedViewClass != null) {
+                        findClass(TextView::class.java.name).hook {
+                            injectMember {
+                                method {
+                                    name = "setTextColor"
+                                    param(Int::class.javaPrimitiveType!!)
+                                }
+                                afterHook {
+                                    try {
+                                        val target = instanceOrNull as? TextView ?: return@afterHook
+                                        val injected = findInjectedTextView(target)
+                                        if (injected == null || target === injected) return@afterHook
+                                        if (isInsideNetworkSpeedView(target, networkSpeedViewClass)) {
+                                            val color = args(0).int()
+                                            injected.setTextColor(color)
+                                        }
+                                    } catch (e: Throwable) {
+                                        loggerD(msg = "BatteryTemp: network color sync failed: ${e.message}")
+                                    }
                                 }
                             }
                         }
@@ -121,201 +159,99 @@ class HookEntry : IYukiHookXposedInit {
     companion object {
         private const val TAG_KEY = 0x42545431
         private const val REFRESH_MS = 2000L
-        private const val STYLE_REFRESH_MS = 200L
 
-        private fun findLeftSideGroup(root: ViewGroup): ViewGroup? {
-            // Do not use the hard-coded resource id from the current source.
-            // Resolve the same phone_status_bar_left_container by its runtime resource name.
-            val targetName = "phone_status_bar_left_container"
-            val targetId = try {
-                root.resources.getIdentifier(targetName, "id", root.context.packageName)
-            } catch (_: Throwable) {
-                0
-            }
-
-            if (targetId != 0) {
-                root.findViewById<View>(targetId)?.let { view ->
-                    if (view is ViewGroup) return view
+        private fun findInjectedTextView(view: View): TextView? {
+            var parent: ViewParent? = view
+            while (parent != null) {
+                if (parent is ViewGroup) {
+                    for (index in 0 until parent.childCount) {
+                        val child = parent.getChildAt(index)
+                        if (child is TextView && child.getTag(TAG_KEY) == true) return child
+                    }
                 }
-            }
-
-            return findViewGroupByResourceName(root, targetName)
-        }
-
-        private fun findViewGroupByResourceName(root: ViewGroup, targetName: String): ViewGroup? {
-            if (resourceName(root) == targetName) return root
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is ViewGroup) {
-                    findViewGroupByResourceName(child, targetName)?.let { return it }
-                }
+                if (parent is View) parent = parent.parent else break
             }
             return null
         }
 
-        /**
-         * Current source behavior: color follows NetworkSpeedView.
-         * User-required behavior: size follows the actual battery percentage text.
-         */
-        private fun applyBatteryStyle(parent: ViewGroup, target: TextView) {
-            val batteryPercent = findBatteryPercentTextView(parent)
-            val networkSpeedText = findNetworkSpeedTextView(parent)
-
-            if (networkSpeedText != null) {
-                target.setTextColor(networkSpeedText.currentTextColor)
-            } else {
-                target.setTextColor(0xFFFFFFFF.toInt())
+        private fun isInsideNetworkSpeedView(view: View, networkSpeedViewClass: Class<*>): Boolean {
+            var parent: ViewParent? = view.parent
+            while (parent != null) {
+                if (networkSpeedViewClass.isInstance(parent)) return true
+                if (parent !is View) break
+                parent = parent.parent
             }
-
-            if (batteryPercent != null && batteryPercent.textSize > 0f) {
-                target.setTextSize(TypedValue.COMPLEX_UNIT_PX, batteryPercent.textSize)
-            } else {
-                target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            }
-        }
-
-        private fun findBatteryPercentTextView(root: ViewGroup): TextView? {
-            val idNames = arrayOf("battery_percent", "battery_percentage", "battery_level")
-            for (name in idNames) {
-                findTextViewByResourceName(root, name)?.let { return it }
-            }
-
-            // HyperOS may keep the percentage view inside the battery component.
-            if (root.javaClass.name.contains("BatteryMeterView", ignoreCase = true) ||
-                root.javaClass.name.contains("BatteryContainer", ignoreCase = true)
-            ) {
-                findPercentTextView(root)?.let { return it }
-            }
-
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is ViewGroup) {
-                    findBatteryPercentTextView(child)?.let { return it }
-                }
-            }
-            return null
-        }
-
-        private fun findPercentTextView(root: ViewGroup): TextView? {
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is TextView && looksLikePercentage(child)) return child
-                if (child is ViewGroup) {
-                    findPercentTextView(child)?.let { return it }
-                }
-            }
-            return null
-        }
-
-        private fun looksLikePercentage(view: TextView): Boolean {
-            val name = resourceName(view).lowercase(Locale.ROOT)
-            if (name.contains("percent") || name.contains("percentage")) return true
-            val text = view.text?.toString()?.trim() ?: return false
-            return text.endsWith("%") && text.length <= 5
-        }
-
-        private fun findTextViewByResourceName(root: ViewGroup, targetName: String): TextView? {
-            if (root is TextView && resourceName(root) == targetName) return root
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is TextView && resourceName(child) == targetName) return child
-                if (child is ViewGroup) {
-                    findTextViewByResourceName(child, targetName)?.let { return it }
-                }
-            }
-            return null
-        }
-
-        private fun findNetworkSpeedTextView(root: ViewGroup): TextView? {
-            if (root.javaClass.name.contains("NetworkSpeedView", ignoreCase = true)) {
-                findFirstTextView(root)?.let { return it }
-            }
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is ViewGroup) {
-                    findNetworkSpeedTextView(child)?.let { return it }
-                }
-            }
-            return null
-        }
-
-        private fun findFirstTextView(root: ViewGroup): TextView? {
-            for (index in 0 until root.childCount) {
-                val child = root.getChildAt(index)
-                if (child is TextView) return child
-                if (child is ViewGroup) {
-                    findFirstTextView(child)?.let { return it }
-                }
-            }
-            return null
+            return false
         }
 
         private fun startTemperatureUpdater(parent: ViewGroup, target: TextView) {
             val handler = Handler(Looper.getMainLooper())
             val update = object : Runnable {
                 override fun run() {
-                    if (!target.isAttachedToWindow) return
                     try {
-                        syncBatteryStyle(parent, target)
+                        if (target != null && parent.context != null) {
+                            val intent = parent.context.registerReceiver(
+                                null,
+                                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                            )
 
-                        val intent = parent.context.registerReceiver(
-                            null,
-                            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                        )
+                            if (intent != null) {
+                                val tempTenth = intent.getIntExtra(
+                                    BatteryManager.EXTRA_TEMPERATURE,
+                                    0
+                                )
+                                val celsius = Math.round(tempTenth / 10.0f)
 
-                        val tempTenth = intent?.getIntExtra(
-                            BatteryManager.EXTRA_TEMPERATURE,
-                            Int.MIN_VALUE
-                        ) ?: Int.MIN_VALUE
+                                val voltage = intent.getIntExtra(
+                                    BatteryManager.EXTRA_VOLTAGE,
+                                    -1
+                                )
 
-                        if (tempTenth != Int.MIN_VALUE) {
-                            val celsius = Math.round(tempTenth / 10.0f)
-                            val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
-                            val batteryManager =
-                                parent.context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-                            val current = batteryManager?.getIntProperty(
-                                BatteryManager.BATTERY_PROPERTY_CURRENT_NOW
-                            ) ?: Int.MIN_VALUE
+                                val batteryManager =
+                                    parent.context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
 
-                            if (voltage >= 0 && current != Int.MIN_VALUE) {
-                                val power = voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
-                                val powerString = String.format(Locale.getDefault(), "%.2fW", power)
-                                target.text = String.format(
+                                val current = batteryManager.getIntProperty(2)
+
+                                val power =
+                                    voltage.toFloat() * current.toFloat() / 1_000_000_000.0f
+
+                                val powerString: String = if (power < 0) {
+                                    String.format(Locale.getDefault(), " %.2fw", power)
+                                } else {
+                                    String.format(Locale.getDefault(), " %.2fw", power)
+                                }
+
+                                val tempString = String.format(
                                     Locale.getDefault(),
                                     " %s℃ %s",
                                     celsius,
                                     powerString
                                 )
-                            } else {
-                                target.text = " ${celsius}℃"
+                                target.text = tempString
                             }
                         }
-
-                        handler.postDelayed(this, REFRESH_MS)
                     } catch (e: Throwable) {
-                        loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.stackTraceToString()}")
-                        handler.postDelayed(this, REFRESH_MS)
+                        loggerD(msg = "BatteryTemp: temperature/power update failed: ${e.message}")
                     }
+
+                    // Keep the original updater lifecycle: always schedule the next update.
+                    handler.postDelayed(this, REFRESH_MS)
                 }
             }
             handler.post(update)
         }
 
-        private fun syncBatteryStyle(parent: ViewGroup, target: TextView) {
-            val batteryPercent = findBatteryPercentTextView(parent)
-            if (batteryPercent != null) {
-                val fontSizePx = batteryPercent.textSize
-                if (fontSizePx > 0f && target.textSize != fontSizePx) {
-                    target.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSizePx)
-                }
-            }
-
-            val networkSpeedText = findNetworkSpeedTextView(parent)
-            if (networkSpeedText != null) {
-                val color = networkSpeedText.currentTextColor
-                if (target.currentTextColor != color) {
-                    target.setTextColor(color)
-                }
+        private fun updateTextColorAndSize(parent: ViewGroup, targetTextView: TextView) {
+            val clockView = parent.findViewById<TextView>(0x7f0a024f)
+            if (clockView != null) {
+                targetTextView.setTextColor(clockView.currentTextColor)
+                val fontSize =
+                    clockView.textSize /
+                        parent.context.resources.displayMetrics.scaledDensity
+                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+            } else {
+                targetTextView.setTextColor(0xFFFFFFFF.toInt())
+                targetTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             }
         }
 
@@ -332,9 +268,6 @@ class HookEntry : IYukiHookXposedInit {
             }
             return null
         }
-
-        private fun dp(context: Context, value: Int): Int =
-            (value * context.resources.displayMetrics.density + 0.5f).toInt()
 
         private fun resourceName(view: View): String = try {
             if (view.id == View.NO_ID) "NO_ID" else view.resources.getResourceEntryName(view.id)
